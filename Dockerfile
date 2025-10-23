@@ -10,7 +10,7 @@ RUN pip install jupyter notebook
 
 RUN pip install numpy==1.26.1
 
-COPY requirements.txt /app/
+COPY requirements.txt .
 
 RUN pip install --no-cache-dir -r requirements.txt
 
