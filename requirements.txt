@@ -1,6 +1,8 @@
 river==0.22.0
+capymoa
 pandas==2.2.3
 scikit-learn
 numpy
-dask[dataframe,distributed]  
 pyarrow
+jpype1
+torch
