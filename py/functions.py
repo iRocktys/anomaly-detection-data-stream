@@ -26,20 +26,13 @@ def carregar_e_unificar(lista_arquivos, CHUNK_SIZE):
     for filepath in lista_arquivos:
         if not os.path.exists(filepath):
             continue
-            
-        nome_arquivo = os.path.basename(filepath)
-        print(f"--> Lendo: {nome_arquivo}")
         
-        try:
-            with pd.read_csv(filepath, chunksize=CHUNK_SIZE, low_memory=False) as reader:
+        with pd.read_csv(filepath, chunksize=CHUNK_SIZE, low_memory=False) as reader:
                 for chunk in reader:
                     chunk.columns = chunk.columns.str.strip()
                     chunk = chunk.drop(columns=[c for c in cols_to_ignore if c in chunk.columns], errors='ignore')
                     chunk = chunk.dropna(axis=1, how='all')
-                    chunk['Origem_Arquivo'] = nome_arquivo
                     df_list.append(chunk)
-        except Exception as e:
-            print(f"Erro crítico no arquivo {nome_arquivo}: {e}")
 
     if not df_list:
         return None
@@ -146,8 +139,13 @@ def visualizar_radares_separados_referencia(df, features):
         plt.show()
 
 def analisar_grupos_similares(df, features, limiar=0.85):
+    """
+    Agrupa ataques baseando-se na similaridade de cosseno de suas features médias.
+    Retorna apenas a tabela analítica dos grupos, sem gerar gráficos.
+    """
     print(f"Clusterizando grupos com similaridade rígida > {limiar*100}%...")
     
+    # 1. Preparação dos dados (Agrupamento e Normalização)
     df_grouped = df.groupby('Label')[features].mean()
     
     scaler = MinMaxScaler()
@@ -155,23 +153,17 @@ def analisar_grupos_similares(df, features, limiar=0.85):
                            index=df_grouped.index, 
                            columns=features)
     
+    # 2. Cálculo da Matriz de Similaridade (Necessário para a lógica de distâncias)
     sim_matrix = cosine_similarity(df_norm)
     df_sim = pd.DataFrame(sim_matrix, index=df_grouped.index, columns=df_grouped.index)
     
-    plt.figure(figsize=(12, 10))
-    mask = df_sim < limiar
-    np.fill_diagonal(mask.values, True)
+    # (Visualização removida aqui)
     
-    sns.heatmap(df_sim, annot=True, fmt=".0%", cmap="Greens", mask=mask,
-                linewidths=.5, cbar_kws={'label': 'Nível de Semelhança'})
-    
-    plt.title(f"Matriz de Similaridade (Corte: {int(limiar*100)}%)", fontsize=16)
-    plt.tight_layout()
-    plt.show()
-    
+    # 3. Lógica de Clusterização Hierárquica
     dist_matrix = 1 - sim_matrix
     np.fill_diagonal(dist_matrix, 0)
     
+    # Converte para formato condensado exigido pelo scipy
     condensed_dist = squareform(dist_matrix, checks=False)
     condensed_dist[condensed_dist < 0] = 0
     
@@ -180,6 +172,7 @@ def analisar_grupos_similares(df, features, limiar=0.85):
     max_d = 1 - limiar
     labels = fcluster(Z, t=max_d, criterion='distance')
     
+    # 4. Construção da Tabela Analítica
     grupos_dict = {}
     for ataque, cluster_id in zip(df_sim.index, labels):
         if cluster_id not in grupos_dict:
@@ -198,6 +191,7 @@ def analisar_grupos_similares(df, features, limiar=0.85):
             sim_media = "N/A"
             conexoes_str = "Nenhuma (Ataque Único)"
         else:
+            # Recalcula estatísticas internas do grupo usando a matriz de similaridade
             sub_matrix = df_sim.loc[membros, membros]
             mask_sub = np.ones(sub_matrix.shape, dtype=bool)
             np.fill_diagonal(mask_sub, False)
@@ -223,6 +217,7 @@ def analisar_grupos_similares(df, features, limiar=0.85):
         })
         
     df_grupos = pd.DataFrame(tabela_dados)
+    # Ordena para mostrar grupos maiores primeiro, depois isolados
     df_grupos = df_grupos.sort_values(by=['Identificação', 'Qtd'], ascending=[True, False]).reset_index(drop=True)
     
     pd.set_option('display.max_colwidth', None)
