@@ -224,6 +224,25 @@ def visualizar_assinaturas_barras(df, top_n=5, amostras_por_classe=5000, n_itera
     plt.tight_layout()
     plt.show()
 
+def remover_features_redundantes(X, threshold_corr=0.95):
+    # Remover colunas com desvio padrão zero
+    X = X.loc[:, X.std() > 0]
+    
+    # Remover colunas altamente correlacionadas 
+    corr_matrix = X.corr().abs()
+    
+    # Seleciona o triângulo superior da matriz para não processar duas vezes
+    upper = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
+    
+    # Identifica colunas onde a correlação é maior que o threshold
+    to_drop = [column for column in upper.columns if any(upper[column] > threshold_corr)]
+    
+    if to_drop:
+        print(f"Features redundantes removidas: {len(to_drop)}")
+        # print(f"Lista: {to_drop}") # Descomente se quiser ver os nomes
+    
+    return X.drop(columns=to_drop)
+
 def criar_stream(df, target_label_col='Label'):
     cols_to_ignore = [
         'Flow ID', 'Source IP', 'Source Port', 'Destination IP', 
@@ -233,45 +252,33 @@ def criar_stream(df, target_label_col='Label'):
     df.columns = df.columns.str.strip()
     target_label_col = target_label_col.strip()
     
+    # Remoção das colunas ignoradas
     cols_present = [c for c in cols_to_ignore if c in df.columns]
     df = df.drop(columns=cols_present)
     
-    df.replace([np.inf, -np.inf], np.nan, inplace=True)
-    
+    # Separação X e y
     X = df.drop(columns=[target_label_col], errors='ignore')
-    X = X.select_dtypes(include=[np.number])
-    X = X.fillna(X.median()).fillna(0)
+    X = X.select_dtypes(include=[np.number]) 
     
+    # Substituir inf pelo maior valor finito da coluna 
+    #    Se for inf positivo, pega o max. Se for negativo, pega o min.
+    #    Para simplificar, substituímos por um valor teto muito alto.
+    X.replace([np.inf], np.finfo(np.float32).max, inplace=True)
+    X.replace([-np.inf], np.finfo(np.float32).min, inplace=True)
+    
+    # Substituir NaN pela Mediana
+    X = X.fillna(X.median()).fillna(0) 
+    
+    # Aplica a redução de dimensionalidade antes de criar a stream 
+    # Para produção deveria ser calculado antes
+    X = remover_features_redundantes(X, threshold_corr=0.95)
+    
+    # Preparação do Target
     le = LabelEncoder()
+    # Garante que seja string para o LabelEncoder funcionar bem
     y = le.fit_transform(df[target_label_col].astype(str))
     
-    stream = NumpyStream(X.values, y, target_name=target_label_col)
+    # Criação da Stream CapyMOA
+    stream = NumpyStream(X.values, y, target_name=target_label_col, feature_names=X.columns.tolist())
     
-    return stream, le
-
-def plot_confusion_matrix(y_true, y_pred, label_encoder, model_name=""):    
-    labels_indices = label_encoder.transform(label_encoder.classes_)
-    labels_names = label_encoder.classes_
-
-    report = classification_report(
-        y_true, y_pred, 
-        labels=labels_indices, 
-        target_names=labels_names,
-        zero_division=0, digits=4
-    )
-    print(report)
-
-    cm = confusion_matrix(y_true, y_pred, labels=labels_indices)
-    
-    plt.figure(figsize=(10, 8))
-    sns.heatmap(
-        cm, 
-        annot=True, fmt="d", cmap="Blues", 
-        xticklabels=labels_names, 
-        yticklabels=labels_names
-    )
-    plt.title(f'Matriz de Confusão - {model_name}')
-    plt.xlabel('Rótulo Predito')
-    plt.ylabel('Rótulo Real')
-    plt.tight_layout()
-    plt.show()
+    return stream, le, X.columns.tolist() 
