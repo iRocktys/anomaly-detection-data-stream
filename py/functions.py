@@ -7,12 +7,8 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import os
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.preprocessing import LabelEncoder, MinMaxScaler, StandardScaler
+from sklearn.preprocessing import LabelEncoder, MinMaxScaler, RobustScaler
 from math import pi, ceil
-from sklearn.metrics.pairwise import cosine_similarity
-from scipy.cluster.hierarchy import linkage, fcluster
-from scipy.spatial.distance import squareform
-from sklearn.model_selection import train_test_split
 
 def carregar_e_unificar(lista_arquivos, CHUNK_SIZE):
     cols_to_ignore = [
@@ -46,7 +42,7 @@ def carregar_e_unificar(lista_arquivos, CHUNK_SIZE):
     print(f"Dataset Unificado Pronto: {df_final.shape[0]} linhas.")
     return df_final
 
-def visualizar_radares_separados_referencia(df, features):
+def visualizar_radares(df, features):
     df_grouped = df.groupby('Label')[features].mean()
     scaler = MinMaxScaler()
     df_norm = pd.DataFrame(scaler.fit_transform(df_grouped), columns=features, index=df_grouped.index)
@@ -106,124 +102,6 @@ def visualizar_radares_separados_referencia(df, features):
         plt.tight_layout()
         plt.show()
 
-def visualizar_assinaturas_barras(df, top_n=5, amostras_por_classe=5000, n_iteracoes=10):
-    cols_ignoradas = ['Origem_Arquivo', 'Label', 'Unnamed: 0', 'Flow ID', 'Timestamp']
-    
-    cols_numericas = [c for c in df.select_dtypes(include=[np.number]).columns if c not in cols_ignoradas]
-    
-    lista_ataques = df['Label'].unique()
-    dados_plot = []
-
-    print(f"Iniciando cálculo de estabilidade ({n_iteracoes} iterações por ataque)...")
-
-    for ataque in lista_ataques:
-        soma_importancias = np.zeros(len(cols_numericas))
-        
-        for i in range(n_iteracoes):
-            rnd_state = np.random.randint(100000)
-            
-            amostras = []
-            for _, grupo in df.groupby('Label'):
-                n = min(len(grupo), amostras_por_classe)
-                amostras.append(grupo.sample(n=n, random_state=rnd_state))
-            
-            df_sample = pd.concat(amostras)
-            
-            X = df_sample[cols_numericas].fillna(0)
-            y = (df_sample['Label'] == ataque).astype(int)
-            
-            rf = RandomForestClassifier(
-                n_estimators=50, 
-                max_depth=10, 
-                class_weight='balanced', 
-                n_jobs=-1,
-                random_state=rnd_state
-            )
-            
-            rf.fit(X, y)
-            soma_importancias += rf.feature_importances_
-
-        media_importancias = soma_importancias / n_iteracoes
-        
-        indices_ordenados = np.argsort(media_importancias)[::-1]
-        top_indices = indices_ordenados[:top_n]
-        
-        for idx in top_indices:
-            dados_plot.append({
-                'Ataque': ataque,
-                'Característica': cols_numericas[idx],
-                'Importância': media_importancias[idx]
-            })
-        
-        print(f"-> Assinatura calculada: {ataque}")
-
-    df_plot = pd.DataFrame(dados_plot)
-    
-    unique_features = df_plot['Característica'].unique()
-    
-    paletas_combinadas = (
-        sns.color_palette("tab20", 20) + 
-        sns.color_palette("Set1", 9) + 
-        sns.color_palette("Paired", 12)
-    )
-    
-    color_map = dict(zip(unique_features, paletas_combinadas[:len(unique_features)]))
-    
-    fig, ax = plt.subplots(figsize=(22, 12))
-    
-    attacks = df_plot['Ataque'].unique()
-    x_positions = np.arange(len(attacks))
-    bar_width = 0.15
-    
-    handles = {}
-    
-    for i, attack in enumerate(attacks):
-        attack_data = df_plot[df_plot['Ataque'] == attack]
-        
-        num_bars = len(attack_data)
-        offsets = (np.arange(num_bars) - (num_bars - 1) / 2) * bar_width
-        
-        for j, (_, row) in enumerate(attack_data.iterrows()):
-            feature_name = row['Característica']
-            importance = row['Importância']
-            color = color_map[feature_name]
-            
-            bar = ax.bar(
-                x_positions[i] + offsets[j], 
-                importance, 
-                width=bar_width, 
-                color=color, 
-                edgecolor='black', 
-                linewidth=0.5
-            )
-            
-            if feature_name not in handles:
-                handles[feature_name] = bar[0]
-
-    ax.set_title(f'Top {top_n} Características Distintivas por Ataque (Agrupadas)', fontsize=18, fontweight='bold')
-    ax.set_xlabel('Tipo de Ataque', fontsize=14)
-    ax.set_ylabel('Importância Média (Gini)', fontsize=14)
-    ax.set_xticks(x_positions)
-    ax.set_xticklabels(attacks, rotation=45, ha='right', fontsize=12)
-    
-    ax.grid(axis='y', linestyle='--', alpha=0.5, zorder=0)
-    
-    ax.legend(
-        handles.values(), 
-        handles.keys(), 
-        bbox_to_anchor=(1.01, 1), 
-        loc='upper left', 
-        borderaxespad=0., 
-        title='Características',
-        fontsize=10,
-        title_fontsize=12,
-        frameon=True,
-        shadow=True
-    )
-    
-    plt.tight_layout()
-    plt.show()
-
 def remover_features_redundantes(X, threshold_corr=0.95):
     # Remover colunas com desvio padrão zero
     X = X.loc[:, X.std() > 0]
@@ -273,6 +151,11 @@ def criar_stream(df, target_label_col='Label'):
     # Para produção deveria ser calculado antes
     X = remover_features_redundantes(X, threshold_corr=0.95)
     
+    # Normalização 
+    scaler = RobustScaler()
+    X_scaled = scaler.fit_transform(X)
+    X = pd.DataFrame(X_scaled, columns=X.columns, index=X.index)
+
     # Preparação do Target
     le = LabelEncoder()
     # Garante que seja string para o LabelEncoder funcionar bem
