@@ -117,7 +117,6 @@ def remover_features_redundantes(X, threshold_corr=0.95):
     
     if to_drop:
         print(f"Features redundantes removidas: {len(to_drop)}")
-        # print(f"Lista: {to_drop}") # Descomente se quiser ver os nomes
     
     return X.drop(columns=to_drop)
 
@@ -138,17 +137,12 @@ def criar_stream(df, target_label_col='Label'):
     X = df.drop(columns=[target_label_col], errors='ignore')
     X = X.select_dtypes(include=[np.number]) 
     
-    # Substituir inf pelo maior valor finito da coluna 
-    #    Se for inf positivo, pega o max. Se for negativo, pega o min.
-    #    Para simplificar, substituímos por um valor teto muito alto.
+    # Tratamento de infinitos e NaNs
     X.replace([np.inf], np.finfo(np.float32).max, inplace=True)
     X.replace([-np.inf], np.finfo(np.float32).min, inplace=True)
-    
-    # Substituir NaN pela Mediana
     X = X.fillna(X.median()).fillna(0) 
     
-    # Aplica a redução de dimensionalidade antes de criar a stream 
-    # Para produção deveria ser calculado antes
+    # Redução de dimensionalidade
     X = remover_features_redundantes(X, threshold_corr=0.95)
     
     # Normalização 
@@ -158,10 +152,14 @@ def criar_stream(df, target_label_col='Label'):
 
     # Preparação do Target
     le = LabelEncoder()
-    # Garante que seja string para o LabelEncoder funcionar bem
     y = le.fit_transform(df[target_label_col].astype(str))
     
-    # Criação da Stream CapyMOA
-    stream = NumpyStream(X.values, y, target_name=target_label_col, feature_names=X.columns.tolist())
+    stream = NumpyStream(
+        X.values, 
+        y, 
+        target_name=target_label_col, 
+        feature_names=X.columns.tolist(),
+        target_type="categorical" 
+    )
     
-    return stream, le, X.columns.tolist() 
+    return stream, le, X.columns.tolist()
