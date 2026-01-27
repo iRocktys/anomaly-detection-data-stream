@@ -120,7 +120,7 @@ def remover_features_redundantes(X, threshold_corr=0.95):
     
     return X.drop(columns=to_drop)
 
-def criar_stream(df, target_label_col='Label'):
+def criar_stream(df, target_label_col='Label', remove_redundant=False):
     cols_to_ignore = [
         'Flow ID', 'Source IP', 'Source Port', 'Destination IP', 
         'Destination Port', 'Timestamp', 'SimillarHTTP', 'Unnamed: 0'
@@ -143,7 +143,8 @@ def criar_stream(df, target_label_col='Label'):
     X = X.fillna(X.median()).fillna(0) 
     
     # Redução de dimensionalidade
-    X = remover_features_redundantes(X, threshold_corr=0.95)
+    if remove_redundant:
+        X = remover_features_redundantes(X, threshold_corr=0.95)
     
     # Normalização 
     scaler = RobustScaler()
