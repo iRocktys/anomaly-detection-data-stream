@@ -120,47 +120,64 @@ def remover_features_redundantes(X, threshold_corr=0.95):
     
     return X.drop(columns=to_drop)
 
-def criar_stream(df, target_label_col='Label', remove_redundant=False):
-    cols_to_ignore = [
-        'Flow ID', 'Source IP', 'Source Port', 'Destination IP', 
-        'Destination Port', 'Timestamp', 'SimillarHTTP', 'Unnamed: 0'
-    ]
+def criar_stream(df, target_label_col='Label', remove_redundant=False, 
+                 selected_features=None, binary_label=True):
     
+    # 1. Limpeza de nomes de colunas
     df.columns = df.columns.str.strip()
     target_label_col = target_label_col.strip()
     
-    # Remoção das colunas ignoradas
-    cols_present = [c for c in cols_to_ignore if c in df.columns]
-    df = df.drop(columns=cols_present)
+    # 2. Definição do X (Features)
+    X_raw = df.drop(columns=[target_label_col], errors='ignore')
+
+    # Lógica de Seleção de Features
+    if selected_features is not None and len(selected_features) > 0:
+        # Filtra apenas as que existem no DF para evitar erros
+        feats_to_use = [f.strip() for f in selected_features if f.strip() in X_raw.columns]
+        
+        if not feats_to_use:
+            raise ValueError("Erro: Nenhuma das features selecionadas foi encontrada no arquivo.")
+            
+        X = X_raw[feats_to_use].copy()
+    else:
+        # Modo Padrão: Remove colunas de identificação irrelevantes
+        cols_to_ignore = [
+            'Flow ID', 'Source IP', 'Source Port', 'Destination IP', 
+            'Destination Port', 'Timestamp', 'SimillarHTTP', 'Unnamed: 0'
+        ]
+        cols_present = [c for c in cols_to_ignore if c in X_raw.columns]
+        X = X_raw.drop(columns=cols_present)
     
-    # Separação X e y
-    X = df.drop(columns=[target_label_col], errors='ignore')
-    X = X.select_dtypes(include=[np.number]) 
-    
-    # Tratamento de infinitos e NaNs
+    # Garante apenas numéricos e trata infinitos/nulos
+    X = X.select_dtypes(include=[np.number])
     X.replace([np.inf], np.finfo(np.float32).max, inplace=True)
     X.replace([-np.inf], np.finfo(np.float32).min, inplace=True)
-    X = X.fillna(X.median()).fillna(0) 
+    X = X.fillna(X.median()).fillna(0)
     
-    # Redução de dimensionalidade
-    if remove_redundant:
-        X = remover_features_redundantes(X, threshold_corr=0.95)
-    
-    # Normalização 
+    # 3. Definição do y (Target)
+    if binary_label:
+        # Normal (Benign) = 0 | Ataque = 1
+        # Normaliza a string para maiúsculo e remove espaços
+        is_benign = df[target_label_col].astype(str).str.strip().str.upper() == 'BENIGN'
+        y = np.where(is_benign, 0, 1).astype(np.int8)
+        target_names = ['Normal', 'Attack']
+    else:
+        # Multiclasse
+        le = LabelEncoder()
+        y = le.fit_transform(df[target_label_col].astype(str))
+        target_names = le.classes_.tolist()
+
+    # 4. Normalização (RobustScaler)
     scaler = RobustScaler()
     X_scaled = scaler.fit_transform(X)
-    X = pd.DataFrame(X_scaled, columns=X.columns, index=X.index)
-
-    # Preparação do Target
-    le = LabelEncoder()
-    y = le.fit_transform(df[target_label_col].astype(str))
     
+    # 5. Criação da Stream CapyMOA
     stream = NumpyStream(
-        X.values, 
+        X_scaled, 
         y, 
         target_name=target_label_col, 
         feature_names=X.columns.tolist(),
-        target_type="categorical" 
+        target_type="categorical"
     )
     
-    return stream, le, X.columns.tolist()
+    return stream, target_names, X.columns.tolist()
