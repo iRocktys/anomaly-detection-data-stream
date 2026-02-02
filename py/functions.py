@@ -15,17 +15,36 @@ from scipy.spatial.distance import squareform
 from sklearn.model_selection import train_test_split
 
 def carregar_e_unificar(lista_arquivos, CHUNK_SIZE):
+    """
+    Args:
+        lista_arquivos: Lista com caminhos dos CSVs a carregar
+                    Ex: ['dataset1.csv', 'dataset2.csv']
+        CHUNK_SIZE: Quantas linhas ler por vez (ex: 100000)
+                    Evita estourar a memória RAM!
+    
+    Returns:
+        DataFrame unificado com todos os dados limpos
+    """
+    # Ignora colunas irrelevantes ou problemáticas para a previsão
     cols_to_ignore = [
-        'Flow ID', 'Source IP', 'Source Port', 'Destination IP', 
-        'Destination Port', 'Timestamp', 'SimillarHTTP', 'Unnamed: 0'
-    ]
+    'Flow ID',          # Identificador único do fluxo (não útil para ML)
+    'Source IP',        # IP de origem (privacidade + não generaliza)
+    'Source Port',      # Porta de origem (muito variável)
+    'Destination IP',   # IP de destino (privacidade + não generaliza)
+    'Destination Port', # Porta de destino (pode ser útil, mas removida)
+    'Timestamp',        # Data/hora (problema: não normaliza bem)
+    'SimillarHTTP',     # Coluna do dataset (ortografia errada no original!)
+    'Unnamed: 0'        # Coluna de índice do pandas (duplicada)
+]
     
     df_list = []
     print(f"Iniciando processamento integral de {len(lista_arquivos)} arquivos...")
     
     for filepath in lista_arquivos:
+        # Verifica se o arquivo existe
         if not os.path.exists(filepath):
-            continue
+            continue # Pula arquivo inexistente
+        
         
         with pd.read_csv(filepath, chunksize=CHUNK_SIZE, low_memory=False) as reader:
                 for chunk in reader:
