@@ -129,7 +129,7 @@ def newStream(df, target_label_col='Label', binary_label=True,
 
     # Criação do Retorno
     if stream:
-        print("Finalização: Criando objeto NumpyStream para o CapyMOA.")
+        print("Finalização: Criando objeto NumpyStream para o CapyMOA.\n")
         stream_obj = NumpyStream(
             X_array, 
             y, 
@@ -139,6 +139,6 @@ def newStream(df, target_label_col='Label', binary_label=True,
         )
         return stream_obj, target_names, feature_names
     else:
-        print("Finalização: Retornando DataFrame pandas processado.")
+        print("Finalização: Retornando DataFrame pandas processado.\n")
         X_df = pd.DataFrame(X_array, columns=feature_names)
         return X_df, y, target_names
