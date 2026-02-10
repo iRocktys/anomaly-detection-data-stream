@@ -6,18 +6,17 @@ from sklearn.feature_selection import VarianceThreshold
 from capymoa.stream import NumpyStream
 import matplotlib.pyplot as plt
 import seaborn as sns
-import math
 
 def removeFeatures(X, y, 
-                   apply_variance=False, threshold_var=0.0, 
-                   apply_corr=False, threshold_corr=0.90, 
-                   apply_rfi=False, top_n_features=20):
+                   threshold_var=None, 
+                   threshold_corr=None, 
+                   top_n_features=None):
     
     initial_count = X.shape[1]
     print(f"\n--- Iniciando Processo de Seleção de Features (Total: {initial_count}) ---")
 
     # Remoção por Variância 
-    if apply_variance:
+    if threshold_var is not None:
         selector = VarianceThreshold(threshold=threshold_var)
         selector.fit(X)
         cols_var = X.columns[selector.get_support()]
@@ -28,7 +27,7 @@ def removeFeatures(X, y,
         print(f"Remoção de Variância: Pular.")
 
     # Remoção por Correlação de Pearson 
-    if apply_corr:
+    if threshold_corr is not None:
         corr_matrix = X.corr().abs()
         upper = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
         to_drop = [column for column in upper.columns if any(upper[column] > threshold_corr)]
@@ -38,7 +37,7 @@ def removeFeatures(X, y,
         print(f"Remover Correlação: Pular.")
 
     # Random Forest Importance
-    if apply_rfi:
+    if top_n_features is not None:
         if X.shape[1] > top_n_features:
             rf = RandomForestClassifier(n_estimators=50, n_jobs=-1, random_state=42)
             rf.fit(X, y)
@@ -74,56 +73,19 @@ def normalizeData(X, method=None):
     return X_scaled
 
 def newStream(df, target_label_col='Label', binary_label=True, 
-              normalize_method="RobustScaler",
-              apply_variance=False, threshold_var=0.0,
-              apply_corr=False, threshold_corr=0.90,
-              apply_rfi=False, top_n_features=20,
-              perform_sanity_check=True,
+              normalize_method=None,
+              threshold_var=None,
+              threshold_corr=None,
+              top_n_features=None,
               stream=True):
 
     # Limpeza Básica
-    print(f"Limpeza: Removendo espaços, identificadores (Flow ID, Timestamp) e colunas vazias...")
+    print(f"Limpeza: Removendo espaços, identificadores (Flow ID, Timestamp, Umma,ed: 0) e colunas vazias...")
     df.columns = df.columns.str.strip()
     target_label_col = target_label_col.strip()
     
     ignore_cols = ['Flow ID', 'Timestamp', 'SimillarHTTP', 'Unnamed: 0']
     cols_to_drop = [c for c in ignore_cols if c in df.columns]
-
-    if perform_sanity_check:
-        print("Sanity Check: Analisando consistência numérica...")
-        numeric_cols = df.select_dtypes(include=[np.number]).columns
-        
-        # CASO 1: Tratamento de Flags (-1)
-        # O CICFlowMeter usa -1 para "Missing Value" em Init_Win_bytes. 
-        # Vamos converter -1 para 0, pois fisicamente bytes não podem ser negativos.
-        # Isso resolve o problema dos "57%" sem perder dados.
-        cols_with_neg1 = []
-        for col in numeric_cols:
-            if (df[col] == -1).any():
-                cols_with_neg1.append(col)
-        
-        if cols_with_neg1:
-            print(f"   -> Ajustando flags '-1' para '0' em {len(cols_with_neg1)} colunas (comum em UDP).")
-            # Substitui apenas onde é exatamente -1
-            df.replace({col: {-1: 0} for col in cols_with_neg1}, inplace=True)
-
-        # CASO 2: Tratamento de Overflow (Valores < -1)
-        # Agora procuramos por lixo real (ex: -2 bilhões)
-        deep_neg_mask = (df[numeric_cols] < 0).any(axis=1)
-        cnt_deep_neg = deep_neg_mask.sum()
-        
-        if cnt_deep_neg > 0:
-            pct_bad = (cnt_deep_neg / len(df)) * 100
-            print(f"   -> ERRO CRÍTICO: {cnt_deep_neg} linhas com Overflow (< 0) detectadas ({pct_bad:.4f}%).")
-            
-            if pct_bad < 2.0:
-                print("   -> Ação: REMOÇÃO (Poucas linhas afetadas).")
-                df = df[~deep_neg_mask]
-            else:
-                print("   -> Ação: CLIPAGEM para 0 (Muitas linhas afetadas).")
-                df[numeric_cols] = df[numeric_cols].clip(lower=0)
-        else:
-            print("   -> Nenhum overflow crítico detectado após ajuste de flags.")
     
     X = df.drop(columns=[target_label_col] + cols_to_drop, errors='ignore')
     
@@ -146,6 +108,16 @@ def newStream(df, target_label_col='Label', binary_label=True,
         y = le.fit_transform(df[target_label_col].astype(str))
         target_names = le.classes_.tolist()
 
+    # Seleção de Features 
+    if threshold_var is not None or threshold_corr is not None or top_n_features is not None:
+        print("Seleção de Features: Iniciando pipeline de redução de dimensionalidade...")
+        X = removeFeatures(X, y, 
+                           threshold_var=threshold_var,
+                           threshold_corr=threshold_corr,
+                           top_n_features=top_n_features)
+    else:
+        print("Seleção de Features: Nenhuma técnica selecionada. Mantendo todas as colunas.")
+
     # Salva nomes das colunas antes de virar array numpy
     feature_names = X.columns.tolist()
 
@@ -154,16 +126,6 @@ def newStream(df, target_label_col='Label', binary_label=True,
         X_array = normalizeData(X, method=normalize_method)
     else:
         X_array = X.values
-
-    # Seleção de Features 
-    if apply_variance or apply_corr or apply_rfi:
-        print("Seleção de Features: Iniciando pipeline de redução de dimensionalidade...")
-        X = removeFeatures(X, y, 
-                           apply_variance=apply_variance, threshold_var=threshold_var,
-                           apply_corr=apply_corr, threshold_corr=threshold_corr,
-                           apply_rfi=apply_rfi, top_n_features=top_n_features)
-    else:
-        print("Seleção de Features: Nenhuma técnica selecionada. Mantendo todas as colunas.")
 
     # Criação do Retorno
     if stream:
