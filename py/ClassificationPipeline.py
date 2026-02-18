@@ -40,7 +40,7 @@ class ClassificationExperimentRunner:
             results[name] = {
                 'instances': [],
                 'accuracy': [], 'f1': [], 'precision': [], 'recall': [], 
-                'kappa': [], 'kappa_t': [], # Adicionado Kappa e Kappa T
+                'kappa': [], 'kappa_t': [],
                 'drifts': [],
                 'windowed_evaluator': ClassificationWindowedEvaluator(schema=stream.get_schema(), window_size=window_size),
                 'cumulative_evaluator': ClassificationEvaluator(schema=stream.get_schema()),
