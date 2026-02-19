@@ -7,7 +7,7 @@ from capymoa.classifier import (
 
 # EXEMPLO DE UTILIZAÇÃO:
 # meus_modelos = get_classification_models(
-#     schema, 
+#     schema,
 #     selected_models=['HT', 'ARF'],
 #     arf_params={'ensemble_size': 50, 'max_features': 0.8},
 #     ht_params={'random_seed': 42}
@@ -22,12 +22,12 @@ def get_classification_models(schema, selected_models=None, lb_params=None, hat_
     # LeveragingBagging (LB)
     if 'LB' in selected_models:
         default_lb = {
-            'schema': schema, 
-            'CLI': None, 
-            'random_seed': 1, 
+            'schema': schema,
+            'CLI': None,
+            'random_seed': 1,
             'base_learner': None,
-            'ensemble_size': 100, 
-            'minibatch_size': None, 
+            'ensemble_size': 100,
+            'minibatch_size': None,
             'number_of_jobs': None
         }
 
