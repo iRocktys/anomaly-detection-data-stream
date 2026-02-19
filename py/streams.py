@@ -72,28 +72,62 @@ def normalizeData(X, method=None):
     print(f"Normalização: {method}")
     return X_scaled
 
+def handleMissingValues(X, method='0'):
+    match str(method).lower():
+        case 'media':
+            print("Tratamento de Nulos: Preenchendo com a MÉDIA das colunas...")
+            return X.fillna(X.mean())
+        case 'mediana':
+            print("Tratamento de Nulos: Preenchendo com a MEDIANA das colunas...")
+            return X.fillna(X.median())
+        case 'moda':
+            print("Tratamento de Nulos: Preenchendo com a MODA das colunas...")
+            # .mode() retorna um DataFrame, pegamos a primeira linha (índice 0)
+            return X.fillna(X.mode().iloc[0])
+        case '0':
+            print("Tratamento de Nulos: Preenchendo com ZERO.")
+            return X.fillna(0)
+        case _:
+            print(f"Aviso: Método de preenchimento '{method}' desconhecido. Usando ZERO por padrão.")
+            return X.fillna(0)
+
 def newStream(df, target_label_col='Label', binary_label=True, 
               normalize_method=None,
               threshold_var=None,
               threshold_corr=None,
               top_n_features=None,
-              stream=True):
+              stream=True,
+              extra_ignore_cols=None,
+              imputation_method='0'):
 
     # Limpeza Básica
-    print(f"Limpeza: Removendo espaços, identificadores (Flow ID, Timestamp, Umma,ed: 0) e colunas vazias...")
+    print(f"Limpeza: Removendo espaços, identificadores (Flow ID, Timestamp, Unnamed: 0) e colunas vazias...")
     df.columns = df.columns.str.strip()
     target_label_col = target_label_col.strip()
     
     ignore_cols = ['Flow ID', 'Timestamp', 'SimillarHTTP', 'Unnamed: 0']
+    
+    if extra_ignore_cols:
+        if isinstance(extra_ignore_cols, str):
+            ignore_cols.append(extra_ignore_cols)
+        else:
+            ignore_cols.extend(extra_ignore_cols)
+            
     cols_to_drop = [c for c in ignore_cols if c in df.columns]
     
     X = df.drop(columns=[target_label_col] + cols_to_drop, errors='ignore')
     
     # Tratamento Numérico
-    print("Pré-processamento: Convertendo infinitos e preenchendo valores nulos...")
+    print("Pré-processamento: Convertendo infinitos...")
     X = X.select_dtypes(include=[np.number])
     X.replace([np.inf, -np.inf], [np.finfo(np.float32).max, np.finfo(np.float32).min], inplace=True)
-    X = X.fillna(0)
+    X = handleMissingValues(X, method=imputation_method)
+
+    # Normalização
+    if normalize_method:
+        col_names_temp = X.columns
+        X_array_temp = normalizeData(X, method=normalize_method)
+        X = pd.DataFrame(X_array_temp, columns=col_names_temp)
 
     # Definição do Target (y)
     type_lbl = "Binário (0=Normal, 1=Attack)" if binary_label else "Multiclasse"
@@ -108,7 +142,7 @@ def newStream(df, target_label_col='Label', binary_label=True,
         y = le.fit_transform(df[target_label_col].astype(str))
         target_names = le.classes_.tolist()
 
-    # Seleção de Features 
+    # Redução da dimensionalidade
     if threshold_var is not None or threshold_corr is not None or top_n_features is not None:
         print("Seleção de Features: Iniciando pipeline de redução de dimensionalidade...")
         X = removeFeatures(X, y, 
@@ -118,20 +152,15 @@ def newStream(df, target_label_col='Label', binary_label=True,
     else:
         print("Seleção de Features: Nenhuma técnica selecionada. Mantendo todas as colunas.")
 
-    # Salva nomes das colunas antes de virar array numpy
+    # Extrai dados finais para retorno
     feature_names = X.columns.tolist()
-
-    # Normalização
-    if normalize_method:
-        X_array = normalizeData(X, method=normalize_method)
-    else:
-        X_array = X.values
+    X_array_final = X.values
 
     # Criação do Retorno
     if stream:
         print("Finalização: Criando objeto NumpyStream para o CapyMOA.\n")
         stream_obj = NumpyStream(
-            X_array, 
+            X_array_final, 
             y, 
             target_name="Class", 
             feature_names=feature_names,
@@ -140,5 +169,5 @@ def newStream(df, target_label_col='Label', binary_label=True,
         return stream_obj, target_names, feature_names
     else:
         print("Finalização: Retornando DataFrame pandas processado.\n")
-        X_df = pd.DataFrame(X_array, columns=feature_names)
+        X_df = pd.DataFrame(X_array_final, columns=feature_names)
         return X_df, y, target_names
