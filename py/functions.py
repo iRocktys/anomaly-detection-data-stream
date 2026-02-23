@@ -121,7 +121,7 @@ def remover_features_redundantes(X, threshold_corr=0.95):
     return X.drop(columns=to_drop)
 
 def criar_stream(df, target_label_col='Label', remove_redundant=False, 
-                 selected_features=None, binary_label=True):
+                selected_features=None, binary_label=True):
     
     # 1. Limpeza de nomes de colunas
     df.columns = df.columns.str.strip()
