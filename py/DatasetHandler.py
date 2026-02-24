@@ -6,7 +6,11 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 import math
-
+from sklearn.ensemble import RandomForestClassifier
+import seaborn as sns
+from sklearn.preprocessing import MinMaxScaler
+from scipy.spatial.distance import pdist
+from scipy.cluster.hierarchy import linkage, dendrogram, leaves_list
 
 warnings.filterwarnings('ignore')
 
@@ -390,4 +394,120 @@ class DatasetHandler:
                    
         plt.suptitle("Perfil de Anomalias", y=0.95, fontweight='bold', fontsize=18)
         plt.subplots_adjust(left=0.05, right=0.8, wspace=0.45, hspace=0.7) 
+        plt.show()
+
+    def extract_ovr_feature_importance(self, X, y, target_names, top_per_class=10):
+        """
+        Calcula a importância das features usando a estratégia One-vs-Rest (OvR).
+        Recebe X (DataFrame de features) e y (array de labels numéricos) já pré-processados.
+        """
+        self._log("\n" + "="*80)
+        self._log(" INICIANDO EXTRAÇÃO DE FEATURES OVR (ONE-VS-REST)")
+        self._log("="*80)
+
+        features = X.columns.tolist()
+        class_top_features = {}
+        all_important_features = set()
+        
+        # Identifica as classes únicas presentes no y
+        unique_classes = np.unique(y)
+
+        for cls_idx in unique_classes:
+            cls_name = target_names[cls_idx]
+            self._log(f" [*] Analisando Assinatura Local: {cls_name} vs Resto do Tráfego...")
+            
+            # Cria alvo binário (1 para a classe atual, 0 para o resto)
+            y_binary = (y == cls_idx).astype(int)
+
+            # Random Forest focado apenas nesta separação
+            rf = RandomForestClassifier(n_estimators=50, random_state=42, n_jobs=-1)
+            rf.fit(X, y_binary)
+
+            # Extração e ordenação das importâncias
+            importances = rf.feature_importances_
+            indices = np.argsort(importances)[::-1]
+
+            # Seleciona as N melhores features para ESTE ataque
+            top_n_features = [features[i] for i in indices[:top_per_class]]
+            class_top_features[cls_name] = top_n_features
+            
+            # Adiciona ao conjunto global
+            all_important_features.update(top_n_features)
+
+        consolidated_features = list(all_important_features)
+        
+        self._log("\n" + "-"*50)
+        self._log(f" [RESUMO] Total de classes analisadas: {len(unique_classes)}")
+        self._log(f" [RESUMO] Features únicas consolidadas: {len(consolidated_features)} (de {len(features)} originais)")
+        self._log("-"*50)
+
+        return class_top_features, consolidated_features
+
+    def plot_similarity_and_feature_groups(self, X, y, target_names, selected_features, metric='euclidean', linkage_method='ward'):
+        self._log("\n" + "="*80)
+        self._log(" INICIANDO ANÁLISE DE SIMILARIDADE E MAPEAMENTO DE FEATURES")
+        self._log("="*80)
+
+        # Filtra as features e calcula assinaturas
+        X_filtered = X[selected_features].copy()
+        X_filtered['Label_Idx'] = y
+        
+        self._log(" [*] Agrupando classes e calculando as médias (Assinaturas)...")
+        df_signature = X_filtered.groupby('Label_Idx').mean()
+        df_signature.index = [target_names[idx] for idx in df_signature.index]
+
+        # Normalização
+        scaler = MinMaxScaler()
+        df_sig_norm = pd.DataFrame(
+            scaler.fit_transform(df_signature), 
+            index=df_signature.index, 
+            columns=df_signature.columns
+        )
+
+        if linkage_method == 'ward' and metric != 'euclidean':
+            self._log(f" [AVISO] O método 'ward' exige distância 'euclidean'. Mudando automaticamente.")
+            metric = 'euclidean'
+
+        # Clusterização para descobrir a ORDEM IDEAL (Linhas e Colunas)
+        # Ataques (Linhas)
+        dist_matrix_rows = pdist(df_sig_norm, metric=metric)
+        Z_rows = linkage(dist_matrix_rows, method=linkage_method)
+        ordem_ataques = leaves_list(Z_rows) 
+
+        # Features (Colunas)
+        dist_matrix_cols = pdist(df_sig_norm.T, metric=metric)
+        Z_cols = linkage(dist_matrix_cols, method=linkage_method)
+        ordem_features = leaves_list(Z_cols)
+
+        # Reordenando os dados para que os parecidos fiquem juntos
+        df_sorted = df_sig_norm.iloc[ordem_ataques, ordem_features]
+
+        # DENDROGRAMA PRINCIPAL
+        plt.figure(figsize=(14, 6))
+        dendrogram(Z_rows, labels=df_sig_norm.index.tolist(), leaf_rotation=45, leaf_font_size=11)
+        plt.title(f"Similaridade Comportamental dos Ataques\n(Métrica: {metric.capitalize()} | Ligação: {linkage_method.capitalize()})", fontweight='bold', fontsize=14)
+        plt.ylabel(f"Distância ({metric})")
+        plt.grid(axis='y', linestyle='--', alpha=0.7)
+        plt.tight_layout()
+        plt.show()
+
+        # MAPA DE CALOR 
+        self._log("\n [*] Gerando Mapa de Calor de Features (Ordenado)...")
+        plt.figure(figsize=(16, 8))
+        
+        ax = sns.heatmap(
+            df_sorted, 
+            cmap='viridis', 
+            annot=False, 
+            linewidths=0.5,
+            cbar_kws={"shrink": 0.8, "label": "Intensidade Normalizada"}
+        )
+        
+        plt.title("Mapa de Calor: Quais Grupos de Features Definem Cada Ataque?", pad=20, fontweight='bold', fontsize=16)
+        plt.xticks(rotation=45, ha='right', fontsize=10)
+        plt.yticks(rotation=0, fontsize=11)
+        plt.xlabel("Features Selecionadas (Agrupadas por Similaridade)", fontweight='bold', labelpad=10)
+        plt.ylabel("Classes de Tráfego / Ataques (Agrupados)", fontweight='bold', labelpad=10)
+        
+        plt.tight_layout()
         plt.show()
