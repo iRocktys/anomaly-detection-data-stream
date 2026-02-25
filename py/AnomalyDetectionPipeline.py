@@ -138,7 +138,7 @@ class AnomalyExperimentRunner:
                             except ValueError: pass
                         status = "TREINO REALIZADO"
                     else:
-                        history['drifts'].append(count)
+                        # history['drifts'].append(count)
                         status = "TREINO BLOQUEADO (JANELA ANÔMALA)"
                     
                     if logging:
@@ -212,77 +212,6 @@ class AnomalyExperimentRunner:
         self.plot(results, attack_regions, title)
         self.plot_score(results, attack_regions, title)
 
-    def _run_memory_stream(self, stream, algorithms, window_size, title, K, anomaly_threshold, logging):
-        results = {} 
-        attack_regions = []
-
-        for i, (alg_name, learner) in enumerate(algorithms.items()):
-            stream.restart()
-            
-            evaluator = AnomalyDetectionEvaluator(schema=stream.get_schema())
-            drift_detector = ADWIN()
-            
-            history = {'instances': [], 'auc': [], 'acc': [], 'scores': [], 'drifts': []}
-            
-            memory_buffer = deque(maxlen=K)
-            total_accepted = 0
-            window_accepted = 0
-            
-            count = 0
-            in_attack, start_attack = False, 0
-
-            while stream.has_more_instances():
-                instance = stream.next_instance()
-                
-                if i == 0:
-                    is_attack = (instance.y_index == 1)
-                    if is_attack and not in_attack:
-                        in_attack, start_attack = True, count
-                    elif not is_attack and in_attack:
-                        in_attack = False
-                        attack_regions.append((start_attack, count))
-
-                score = learner.score_instance(instance) 
-                history['scores'].append(score)
-
-                drift_detector.add_element(score)
-                if drift_detector.detected_change():
-                    history['drifts'].append(count)
-
-                # LÓGICA MEMSTREAM
-                should_train = (len(memory_buffer) < K) or (score < anomaly_threshold)
-
-                if should_train:
-                    memory_buffer.append(instance)
-                    total_accepted += 1
-                    window_accepted += 1
-                    try: 
-                        learner.train(instance)
-                    except ValueError: 
-                        pass
-                
-                evaluator.update(instance.y_index, score)
-                if count % window_size == 0:
-                    metrics = evaluator.metrics_dict()
-                    history['instances'].append(count)
-                    history['auc'].append(evaluator.auc())
-                    history['acc'].append(metrics.get('Accuracy', 0))
-                    
-                    if logging:
-                        print(f"[{alg_name}] Instância: {count}")
-                        print(f"  > Novas amostras aceitas: {window_accepted} | Histórico: {total_accepted}")
-                        print(f"  > Ocupação da Fila: {len(memory_buffer)}/{K}")       
-                        
-                        if window_accepted > K:
-                            print(f"  > AVISO: A memória (K={K}) foi totalmente renovada {window_accepted/K:.1f}x nesta janela.")
-                        
-                count += 1
-                
-            results[alg_name] = history
-
-        self.plot(results, attack_regions, title)
-        self.plot_score(results, attack_regions, title)
-
     def ExecuteExperiments(self, stream, pipeline_name, algorithms, 
                            warmup_windows=5, window_size=200, 
                            anomaly_threshold=0.4, beta=0.3, 
@@ -291,8 +220,7 @@ class AnomalyExperimentRunner:
         # Mapeamento de nomes para funções
         pipelines = {
             'adaptive': lambda: self._run_adaptive_blocking(stream, algorithms, warmup_windows, window_size, title, anomaly_threshold, beta, logging),
-            'standard': lambda: self._run_standard_execution(stream, algorithms, window_size, title),
-            'memory': lambda: self._run_memory_stream(stream, algorithms, window_size, title, K_MEM, anomaly_threshold, logging)
+            'standard': lambda: self._run_standard_execution(stream, algorithms, window_size, title)
         }
 
         if pipeline_name in pipelines:

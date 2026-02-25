@@ -35,9 +35,9 @@ def get_anomaly_models(
             'schema': schema,
             'CLI': None,
             'random_seed': 1,
-            'window_size': 250,
-            'number_of_trees': 25,
-            'max_depth': 15,
+            'window_size': 500,
+            'number_of_trees': 32,
+            'max_depth': 10,
             'anomaly_threshold': 0.5,
             'size_limit': 0.1
         }
