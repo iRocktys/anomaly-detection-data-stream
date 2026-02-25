@@ -3,4 +3,4 @@
 *.pdf
 .venv
 *.csv
-/py/capyMOA
+.vscode
