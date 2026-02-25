@@ -189,9 +189,9 @@ class AnomalyExperimentRunner:
                 score = learner.score_instance(instance) 
                 history['scores'].append(score)
 
-                drift_detector.add_element(score)
-                if drift_detector.detected_change():
-                    history['drifts'].append(count)
+                # drift_detector.add_element(score)
+                # if drift_detector.detected_change():
+                #     history['drifts'].append(count)
 
                 try:
                     learner.train(instance)
