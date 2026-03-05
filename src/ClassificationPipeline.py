@@ -49,9 +49,9 @@ class ClassificationExperimentRunner:
             def clean(d_list): return [0.0 if (v is None or np.isnan(v)) else v for v in d_list]
 
             # Linhas de métricas limitadas às 3 solicitadas
-            ax1.plot(x_axis, clean(data['precision']), label=name, color=color, linewidth=2, zorder=3)
-            ax2.plot(x_axis, clean(data['recall']), label=name, color=color, linewidth=2, zorder=3)
-            ax3.plot(x_axis, clean(data['f1']), label=name, color=color, linewidth=2, zorder=3)
+            ax1.plot(x_axis, clean(data['precision']), label=name, marker='o', color=color, linewidth=2, zorder=3)
+            ax2.plot(x_axis, clean(data['recall']), label=name, marker='o', color=color, linewidth=2, zorder=3)
+            ax3.plot(x_axis, clean(data['f1']), label=name, marker='o', color=color, linewidth=2, zorder=3)
 
             # Drifts
             for drift_pos in data['drifts']:
@@ -124,10 +124,10 @@ class ClassificationExperimentRunner:
                 c_eval.update(instance.y_index, prediction)
 
                 # Drift
-                error = 0.0 if prediction == instance.y_index else 1.0
-                res['adwin'].add_element(error)
-                if res['adwin'].detected_change():
-                    res['drifts'].append(count)
+                # error = 0.0 if prediction == instance.y_index else 1.0
+                # res['adwin'].add_element(error)
+                # if res['adwin'].detected_change():
+                #     res['drifts'].append(count)
 
                 # Treino
                 model.train(instance)
