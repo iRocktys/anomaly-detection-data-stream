@@ -35,11 +35,11 @@ def get_anomaly_models(
             'schema': schema,
             'CLI': None,
             'random_seed': 1,
-            'window_size': 500,
-            'number_of_trees': 32,
-            'max_depth': 10,
-            'anomaly_threshold': 0.5,
-            'size_limit': 0.1
+            'window_size': 150,
+            'number_of_trees': 80,
+            'max_depth': 5,
+            'anomaly_threshold': 0.1,
+            'size_limit': 0.01
         }
         
         if hst_params: default_hst.update(hst_params)

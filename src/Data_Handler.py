@@ -15,11 +15,6 @@ from scipy.cluster.hierarchy import linkage, dendrogram, leaves_list
 warnings.filterwarnings('ignore')
 
 class DatasetHandler:
-    """
-    classe responsável por manipular, balancear, ordenar e visualizar 
-    datasets de anomalias e tráfego de rede.
-    """
-    
     def __init__(self, logging=True):
         self.logging = logging
 
