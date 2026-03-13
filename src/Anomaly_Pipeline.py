@@ -61,9 +61,11 @@ class AnomalyExperimentRunner:
         ax.set_title(f"Análise de Scores (Média Móvel - Janela {window_size})", fontsize=14, fontweight='bold')
         ax.set_ylabel("Score de Anomalia", fontsize=14)
         ax.set_xlabel("Instâncias", fontsize=14)
-        ax.legend(loc='upper right', fontsize=12, framealpha=0.9)
+        ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.15), ncol=len(results) + 2, 
+                  fontsize=12, frameon=False)
         ax.grid(True, alpha=0.3, linestyle=':', zorder=0)
         ax.set_ylim(0.0, 1.1)
+        fig.subplots_adjust(bottom=0.2)
         plt.tight_layout()
         plt.show()
 
@@ -97,9 +99,10 @@ class AnomalyExperimentRunner:
         ax2.set_ylabel("Precision", fontsize=14)
         ax3.set_ylabel("Recall", fontsize=14)
         ax3.set_xlabel("Instâncias", fontsize=14)
-        ax1.legend(loc='upper right', fontsize=12, frameon=True, framealpha=0.9)
-        
+        ax3.legend(loc='upper center', bbox_to_anchor=(0.5, -0.25), ncol=len(results),
+                   fontsize=12, frameon=False)
         plt.suptitle(title, fontsize=16, fontweight='bold')
+        fig.subplots_adjust(bottom=0.3)
         plt.tight_layout()
         plt.show()
 
