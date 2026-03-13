@@ -1,27 +1,24 @@
 from turtle import color
-
+from sklearn.metrics import f1_score, precision_score, recall_score
 import numpy as np
 import matplotlib.pyplot as plt
 from collections import deque
-from capymoa.evaluation import AnomalyDetectionEvaluator, ClassificationEvaluator
-from capymoa.drift.detectors import ADWIN
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
-from src.DynamicThresholding import DynamicQuantile, EmpiricalPOT, RollingOtsu, RollingZScore
+from capymoa.evaluation import ClassificationEvaluator
+
 class AnomalyExperimentRunner:
     def __init__(self):
         pass
 
-    def _get_metric_classifier(self, metrics_dict, metric_name):
-        val = metrics_dict.get(f'{metric_name}_0')
-        if val is None or np.isnan(val):
-            val = metrics_dict.get(metric_name, 0.0)
-        return float(val) if not np.isnan(val) else 0.0
-
-    def _get_metric_anomaly(self, metrics_dict, metric_name):
-        val = metrics_dict.get(metric_name)
-        if val is None or np.isnan(val):
-            # O MOA às vezes capitaliza a primeira letra (ex: 'Recall' em vez de 'recall')
-            val = metrics_dict.get(metric_name.capitalize(), 0.0) 
+    def _get_metric_classifier(self, metrics_dict, metric_name, target_class=1):
+        if target_class is None:
+            val = metrics_dict.get(metric_name)
+            if val is None or np.isnan(val):
+                val = metrics_dict.get(f'macro_{metric_name}', 0.0)
+        else:
+            val = metrics_dict.get(f'{metric_name}_{target_class}')
+            if val is None or np.isnan(val):
+                val = metrics_dict.get(metric_name, 0.0)
+                
         return float(val) if val is not None and not np.isnan(val) else 0.0
     
     def plot_score(self, results, attack_regions, title):
@@ -89,39 +86,44 @@ class AnomalyExperimentRunner:
         plt.tight_layout()
         plt.show()
 
-    def display_cumulative_metrics(self, algorithms_results):
+    def display_cumulative_metrics(self, predictions_history, schema=None):
         print(f"\n{'='*65}")
-        print(f"{'RESUMO DE MÉTRICAS ACUMULATIVAS (VALORES REAIS)':^65}")
+        print(f"{'RESUMO DE MÉTRICAS ACUMULATIVAS':^65}")
         print(f"{'='*65}")
         print(f"{'Algoritmo':<25} | {'F1':<10} | {'Prec':<10} | {'Rec':<10}")
         print(f"{'-'*65}")
 
-        for name, evaluators in algorithms_results.items():
-            class_m = evaluators['evaluator_class'].metrics_dict()
-            anom_m = evaluators['evaluator_anomaly'].metrics_dict()
-            f1 = self._get_metric_classifier(class_m, 'f1_score')
-            prec = self._get_metric_classifier(class_m, 'precision')
-            recall = anom_m.get('Recall', 0.0)
+        for name, data in predictions_history.items():
+            y_true_list = data['true_labels']
+            y_pred_list = data['predicted_classes']
             
+            # Sklearn: processamento em lote (vetorizado)
+            f1 = f1_score(y_true_list, y_pred_list, zero_division=0) * 100
+            prec = precision_score(y_true_list, y_pred_list, zero_division=0) * 100
+            recall = recall_score(y_true_list, y_pred_list, zero_division=0) * 100
+
             print(f"{name:<25} | {f1:<10.2f} | {prec:<10.2f} | {recall:<10.2f}")
         
         print(f"{'='*65}\n")
 
-    def _run_anomaly_evaluation(self, stream, algorithms, window_size, title):
+    def _run_anomaly_evaluation(self, stream, algorithms, window_size, title, target_class=0):
         results_metrics = {}
         results_scores = {}
         attack_regions = []
-        final_evaluators = {}
+        
+        # Dicionário para armazenar o histórico completo de predições e rótulos
+        predictions_history = {}
+        schema = stream.get_schema()
 
         for alg_idx, (alg_name, learner) in enumerate(algorithms.items()):
             stream.restart()
             
-            # Inicialização mantida conforme evaluation.py
-            evaluator_anomaly = AnomalyDetectionEvaluator(schema=stream.get_schema(), window_size=window_size)
-            evaluator_class = ClassificationEvaluator(schema=stream.get_schema(), window_size=window_size)
+            evaluator_class = ClassificationEvaluator(schema=schema, window_size=window_size)
             
             history = {'instances': [], 'f1_score': [], 'precision': [], 'recall': []}
             results_scores[alg_name] = {'scores': []}
+            alg_true_labels = []
+            alg_predicted_classes = []
             
             count = 0
             in_attack, start_attack = False, 0
@@ -141,26 +143,31 @@ class AnomalyExperimentRunner:
                 score = learner.score_instance(instance) 
                 results_scores[alg_name]['scores'].append(score)
                 
-                # Discretização mantida em 0.5 (padrão MOA)
                 predicted_class = 1 if score > 0.5 else 0
                 
-                evaluator_anomaly.update(true_label, score)
+                # Salvando rótulos reais e predições nas listas do dicionário
+                alg_true_labels.append(true_label)
+                alg_predicted_classes.append(predicted_class)
+                
                 evaluator_class.update(true_label, predicted_class)
-
+               
                 try: 
-                    learner.train(instance)
+                    if alg_name in ['AE', 'Autoencoder']:
+                        if predicted_class == 0:
+                            learner.train(instance)
+                    else:
+                        learner.train(instance)
                 except ValueError: 
                     pass
 
                 if count > 0 and count % window_size == 0:
                     class_metrics = evaluator_class.metrics_dict()
-                    anomaly_metrics = evaluator_anomaly.metrics_dict()
                     
-                    # VALORES BRUTOS: Sem multiplicação por 100
-                    f1_val = self._get_metric_classifier(class_metrics, 'f1_score')
-                    prec_val = self._get_metric_classifier(class_metrics, 'precision')
-                    recall_val = self._get_metric_anomaly(anomaly_metrics, 'Recall')
-                    
+                    # Continua usando _get_metric_classifier para manter a flexibilidade de target_class (aqui em 0 como no seu código base)
+                    f1_val = self._get_metric_classifier(class_metrics, 'f1_score', target_class=target_class)
+                    prec_val = self._get_metric_classifier(class_metrics, 'precision', target_class=target_class)
+                    recall_val = self._get_metric_classifier(class_metrics, 'recall', target_class=target_class)
+
                     history['instances'].append(count)
                     history['f1_score'].append(f1_val)
                     history['precision'].append(prec_val)
@@ -169,11 +176,13 @@ class AnomalyExperimentRunner:
                 count += 1
                 
             results_metrics[alg_name] = history
-            final_evaluators[alg_name] = {
-                'evaluator_class': evaluator_class, 
-                'evaluator_anomaly': evaluator_anomaly
+            
+            # Guarda as listas no dicionário usando o nome do algoritmo como chave
+            predictions_history[alg_name] = {
+                'true_labels': alg_true_labels,
+                'predicted_classes': alg_predicted_classes
             }
 
         self.plot_score(results_scores, attack_regions, title)
         self.plot_metrics(results_metrics, attack_regions, title)
-        self.display_cumulative_metrics(final_evaluators)
+        self.display_cumulative_metrics(predictions_history, schema)

@@ -35,13 +35,13 @@ def get_anomaly_models(
             'schema': schema,
             'CLI': None,
             'random_seed': 1,
-            'window_size': 150,
-            'number_of_trees': 80,
-            'max_depth': 5,
-            'anomaly_threshold': 0.1,
-            'size_limit': 0.01
+            'window_size': 1900,
+            'number_of_trees': 30,
+            'max_depth': 7,
+            'anomaly_threshold': 0.3,
+            'size_limit': 0.41
         }
-        
+ 
         if hst_params: default_hst.update(hst_params)
         models["HalfSpaceTrees"] = HalfSpaceTrees(**default_hst)
 
@@ -67,9 +67,9 @@ def get_anomaly_models(
     if 'AE' in selected_models:
         default_ae = {
             'schema': schema,
-            'hidden_layer': 2,
-            'learning_rate': 0.5,
-            'threshold': 0.6,
+            'hidden_layer': 10,
+            'learning_rate': 0.001,
+            'threshold': 0.3,
             'random_seed': 1
         }
         
@@ -92,11 +92,11 @@ def get_anomaly_models(
     if 'AIF' in selected_models:
         default_aif = {
             'schema': schema, 
-            'window_size': 256,
+            'window_size': 128,
             'n_trees': 100,
-            'height': None,
+            'height': 5,
             'seed': None, # int or None
-            'm_trees': 10,
+            'm_trees': 30,
             'weights': 0.5
         }
         
