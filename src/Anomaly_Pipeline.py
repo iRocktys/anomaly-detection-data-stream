@@ -1,31 +1,39 @@
-from turtle import color
 from sklearn.metrics import f1_score, precision_score, recall_score
 import numpy as np
 import matplotlib.pyplot as plt
-from collections import deque
 from capymoa.evaluation import ClassificationEvaluator
 
 class AnomalyExperimentRunner:
-    def __init__(self):
-        pass
+    def __init__(self, target_names):
+        self.target_names = target_names
+        self.normal_class_idx = 0
+        for i, name in enumerate(target_names):
+            if str(name).strip().upper() in ['BENIGN', 'NORMAL', '0']:
+                self.normal_class_idx = i
+                break
 
     def _get_metric_classifier(self, metrics_dict, metric_name, target_class=1):
+        norm_metrics = {str(k).lower(): v for k, v in metrics_dict.items()}
+        metric_name = str(metric_name).lower()
+        
         if target_class is None:
-            val = metrics_dict.get(metric_name)
-            if val is None or np.isnan(val):
-                val = metrics_dict.get(f'macro_{metric_name}', 0.0)
+            val_0 = norm_metrics.get(f'{metric_name}_0', 0.0)
+            val_1 = norm_metrics.get(f'{metric_name}_1', 0.0)
+            
+            val_0 = 0.0 if val_0 is None or np.isnan(val_0) else float(val_0)
+            val_1 = 0.0 if val_1 is None or np.isnan(val_1) else float(val_1)
+            
+            return (val_0 + val_1) / 2.0
+            
         else:
-            val = metrics_dict.get(f'{metric_name}_{target_class}')
-            if val is None or np.isnan(val):
-                val = metrics_dict.get(metric_name, 0.0)
-                
-        return float(val) if val is not None and not np.isnan(val) else 0.0
+            val = norm_metrics.get(f'{metric_name}_{target_class}')
+            return float(val) if val is not None and not np.isnan(val) else 0.0
     
-    def plot_score(self, results, attack_regions, title):
+    def plot_score(self, results, attack_regions, title, threshold=0.5):
         fig, ax = plt.subplots(figsize=(15, 6)) 
         
-        # Paleta de cores para diferenciar os algoritmos
         colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2']
+        bg_colors = ['#F7C5CD', '#C5D9F7', '#C5F7C5', '#F7E6C5', '#E3C5F7', '#F7D9C5', '#C5F7E6']
         
         for i, (name, data) in enumerate(results.items()):
             color = colors[i % len(colors)]
@@ -33,23 +41,27 @@ class AnomalyExperimentRunner:
             instances = np.arange(len(scores))
             window_size = 50
             
-            # Recalcula a média móvel
             moving_avg = np.array([np.mean(scores[max(0, j-window_size):j+1]) for j in range(len(scores))])
-            
-            # Plota apenas a linha contínua da média móvel
             ax.plot(instances, moving_avg, color=color, alpha=0.85, linewidth=1.5, label=f'{name}', zorder=3)
 
-        # Adiciona as regiões de ataque (apenas uma vez para a legenda não duplicar)
-        added_attack_label = False
-        for start, end in attack_regions:
-            ax.axvspan(start, end, facecolor="#F7C5CD", alpha=0.3, zorder=1,
-                       label='Região de Ataque' if not added_attack_label else "")
-            added_attack_label = True
+        ax.axhline(y=threshold, color='red', linestyle='--', linewidth=2, alpha=0.8, 
+                   label=f'Threshold ({threshold})', zorder=4)
+
+        added_attack_labels = set()
+        for start, end, attack_idx in attack_regions:
+            attack_name = self.target_names[attack_idx] if attack_idx < len(self.target_names) else f'Ataque {attack_idx}'
+            bg_color = bg_colors[attack_idx % len(bg_colors)]
+            
+            label_to_show = f'Ataque: {attack_name}' if attack_name not in added_attack_labels else ""
+            ax.axvspan(start, end, facecolor=bg_color, alpha=0.3, zorder=1, label=label_to_show)
+            
+            if label_to_show:
+                added_attack_labels.add(attack_name)
 
         ax.set_title(f"Análise de Scores (Média Móvel - Janela {window_size})", fontsize=14, fontweight='bold')
         ax.set_ylabel("Score de Anomalia", fontsize=14)
         ax.set_xlabel("Instâncias", fontsize=14)
-        ax.legend(loc='upper right', fontsize=14, framealpha=0.9)
+        ax.legend(loc='upper right', fontsize=12, framealpha=0.9)
         ax.grid(True, alpha=0.3, linestyle=':', zorder=0)
         ax.set_ylim(0.0, 1.1)
         plt.tight_layout()
@@ -58,21 +70,26 @@ class AnomalyExperimentRunner:
     def plot_metrics(self, results, attack_regions, title):
         fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(15, 10), sharex=True)
         colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2'] 
+        bg_colors = ['#F7C5CD', '#C5D9F7', '#C5F7C5', '#F7E6C5', '#E3C5F7', '#F7D9C5', '#C5F7E6']
         
         for i, (name, data) in enumerate(results.items()):
             color = colors[i % len(colors)]
-            
             ax1.plot(data['instances'], data['f1_score'], label=f'{name}', color=color, linewidth=2.5, zorder=3, marker='o', markersize=5)
             ax2.plot(data['instances'], data['precision'], label=f'{name}', color=color, linewidth=2.5, zorder=3, marker='o', markersize=5)
             ax3.plot(data['instances'], data['recall'], label=f'{name}', color=color, linewidth=2.5, zorder=3, marker='o', markersize=5)
 
         for ax in [ax1, ax2, ax3]:
-            added_attack_label = False
-            for start, end in attack_regions:
-                ax.axvspan(start, end, facecolor="#F7C5CD", alpha=0.4, zorder=2,
-                            label='Região de Ataque' if not added_attack_label else "")
-                added_attack_label = True
+            added_attack_labels = set()
+            for start, end, attack_idx in attack_regions:
+                attack_name = self.target_names[attack_idx] if attack_idx < len(self.target_names) else f'Ataque {attack_idx}'
+                bg_color = bg_colors[attack_idx % len(bg_colors)]
                 
+                label_to_show = f'{attack_name}' if attack_name not in added_attack_labels else ""
+                ax.axvspan(start, end, facecolor=bg_color, alpha=0.4, zorder=2, label=label_to_show)
+                
+                if label_to_show:
+                    added_attack_labels.add(attack_name)
+                    
             ax.grid(True, alpha=0.3, linestyle=':', zorder=0)
             ax.tick_params(axis='both', which='major', labelsize=12)
         
@@ -80,7 +97,7 @@ class AnomalyExperimentRunner:
         ax2.set_ylabel("Precision", fontsize=14)
         ax3.set_ylabel("Recall", fontsize=14)
         ax3.set_xlabel("Instâncias", fontsize=14)
-        ax1.legend(loc='best', fontsize=14, frameon=True, framealpha=0.9)
+        ax1.legend(loc='upper right', fontsize=12, frameon=True, framealpha=0.9)
         
         plt.suptitle(title, fontsize=16, fontweight='bold')
         plt.tight_layout()
@@ -97,7 +114,7 @@ class AnomalyExperimentRunner:
             y_true_list = data['true_labels']
             y_pred_list = data['predicted_classes']
             
-            # Sklearn: processamento em lote (vetorizado)
+            # Sklearn apenas aqui, no final (vetorizado para o acumulado real)
             f1 = f1_score(y_true_list, y_pred_list, zero_division=0) * 100
             prec = precision_score(y_true_list, y_pred_list, zero_division=0) * 100
             recall = recall_score(y_true_list, y_pred_list, zero_division=0) * 100
@@ -106,50 +123,61 @@ class AnomalyExperimentRunner:
         
         print(f"{'='*65}\n")
 
-    def _run_anomaly_evaluation(self, stream, algorithms, window_size, title, target_class=0):
+    def _run_anomaly_evaluation(self, stream, algorithms, window_size, title, target_class=None, threshold=0.5):
         results_metrics = {}
         results_scores = {}
         attack_regions = []
         
-        # Dicionário para armazenar o histórico completo de predições e rótulos
         predictions_history = {}
         schema = stream.get_schema()
 
         for alg_idx, (alg_name, learner) in enumerate(algorithms.items()):
             stream.restart()
-            
             evaluator_class = ClassificationEvaluator(schema=schema, window_size=window_size)
             
             history = {'instances': [], 'f1_score': [], 'precision': [], 'recall': []}
             results_scores[alg_name] = {'scores': []}
+            
             alg_true_labels = []
             alg_predicted_classes = []
             
             count = 0
-            in_attack, start_attack = False, 0
+            in_attack = False
+            start_attack = 0
+            current_attack_label = None
 
             while stream.has_more_instances():
                 instance = stream.next_instance()
-                true_label = instance.y_index 
+                
+                true_label_multiclass = instance.y_index 
+                true_label_binary = 1 if true_label_multiclass != self.normal_class_idx else 0
                 
                 if alg_idx == 0:
-                    is_attack = (true_label == 1)
-                    if is_attack and not in_attack:
-                        in_attack, start_attack = True, count
-                    elif not is_attack and in_attack:
-                        in_attack = False
-                        attack_regions.append((start_attack, count))
+                    is_attack = (true_label_binary == 1)
+                    
+                    if is_attack:
+                        if not in_attack:
+                            in_attack = True
+                            start_attack = count
+                            current_attack_label = true_label_multiclass
+                        elif current_attack_label != true_label_multiclass:
+                            attack_regions.append((start_attack, count, current_attack_label))
+                            start_attack = count
+                            current_attack_label = true_label_multiclass
+                    else:
+                        if in_attack:
+                            in_attack = False
+                            attack_regions.append((start_attack, count, current_attack_label))
 
                 score = learner.score_instance(instance) 
                 results_scores[alg_name]['scores'].append(score)
                 
-                predicted_class = 1 if score > 0.5 else 0
+                predicted_class = 1 if score > threshold else 0
                 
-                # Salvando rótulos reais e predições nas listas do dicionário
-                alg_true_labels.append(true_label)
+                alg_true_labels.append(true_label_binary)
                 alg_predicted_classes.append(predicted_class)
                 
-                evaluator_class.update(true_label, predicted_class)
+                evaluator_class.update(true_label_binary, predicted_class)
                
                 try: 
                     if alg_name in ['AE', 'Autoencoder']:
@@ -163,7 +191,19 @@ class AnomalyExperimentRunner:
                 if count > 0 and count % window_size == 0:
                     class_metrics = evaluator_class.metrics_dict()
                     
-                    # Continua usando _get_metric_classifier para manter a flexibilidade de target_class (aqui em 0 como no seu código base)
+                    # if count == window_size:
+                    #     print(f"\n{'='*60}")
+                    #     print(f"[DIAGNÓSTICO CAPYMOA - Algoritmo: {alg_name}]")
+                    #     print(f"Chaves no dicionário: {list(class_metrics.keys())}")
+                    #     total_ataques_reais = sum(alg_true_labels[-window_size:])
+                    #     total_ataques_preditos = sum(alg_predicted_classes[-window_size:])
+                    #     print(f"Análise desta Janela Prequencial (Tamanho {window_size}):")
+                    #     print(f" -> Ataques Reais (Ground Truth): {total_ataques_reais}")
+                    #     print(f" -> Ataques Preditos (Score > {threshold}): {total_ataques_preditos}")
+                    #     if total_ataques_preditos == 0:
+                    #         print("🚨 ALERTA: Seu modelo NÃO previu nenhum ataque nesta janela. F1 será 0.0!")
+                    #     print(f"{'='*60}\n")
+                    
                     f1_val = self._get_metric_classifier(class_metrics, 'f1_score', target_class=target_class)
                     prec_val = self._get_metric_classifier(class_metrics, 'precision', target_class=target_class)
                     recall_val = self._get_metric_classifier(class_metrics, 'recall', target_class=target_class)
@@ -175,14 +215,16 @@ class AnomalyExperimentRunner:
                         
                 count += 1
                 
+            if alg_idx == 0 and in_attack:
+                attack_regions.append((start_attack, count, current_attack_label))
+                
             results_metrics[alg_name] = history
             
-            # Guarda as listas no dicionário usando o nome do algoritmo como chave
             predictions_history[alg_name] = {
                 'true_labels': alg_true_labels,
                 'predicted_classes': alg_predicted_classes
             }
 
-        self.plot_score(results_scores, attack_regions, title)
+        self.plot_score(results_scores, attack_regions, title, threshold)
         self.plot_metrics(results_metrics, attack_regions, title)
         self.display_cumulative_metrics(predictions_history, schema)

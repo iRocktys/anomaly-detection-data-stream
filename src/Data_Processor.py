@@ -97,6 +97,31 @@ class DataStreamProcessor:
                 self._log(f"Aviso: Método de preenchimento '{method}' desconhecido. Usando ZERO por padrão.")
                 return X.fillna(0)
 
+    def _encode_labels(self, y_series, binary_label):
+        y_str = y_series.astype(str).str.strip()
+        
+        if binary_label:
+            self._log("Target: Binarizando rótulos (0=BENIGN, 1=ATTACK)...")
+            is_benign = y_str.str.upper() == 'BENIGN'
+            y = np.where(is_benign, 0, 1).astype(np.int8)
+            target_names = ['BENIGN', 'ATTACK'] 
+        else:
+            self._log("Target: Mantendo multiclasse (Forçando BENIGN=0)...")
+            unique_labels = y_str.unique().tolist()
+            
+            # Encontra o label normal (BENIGN) e força ele a ser o índice 0
+            normal_label = next((l for l in unique_labels if l.upper() in ['BENIGN', 'NORMAL']), None)
+            if normal_label and normal_label in unique_labels:
+                unique_labels.remove(normal_label)
+                unique_labels.insert(0, normal_label) # Coloca na posição 0
+            
+            # Mapeia as strings para inteiros respeitando a nova ordem
+            mapping = {label: idx for idx, label in enumerate(unique_labels)}
+            y = y_str.map(mapping).fillna(-1).astype(np.int8)
+            target_names = unique_labels
+
+        return y, target_names
+
     def create_stream(self, df, target_label_col='Label', binary_label=True, 
                       normalize_method=None, threshold_var=None,
                       threshold_corr=None, top_n_features=None,
@@ -104,12 +129,11 @@ class DataStreamProcessor:
                       imputation_method='0'):
 
         # limpeza básica
-        self._log("Limpeza: Removendo espaços, identificadores (Flow ID, Timestamp, Unnamed: 0) e colunas vazias...")
+        self._log("Limpeza: Removendo espaços, identificadores e colunas vazias...")
         df.columns = df.columns.str.strip()
         target_label_col = target_label_col.strip()
         
         ignore_cols = ['Flow ID', 'Timestamp', 'SimillarHTTP', 'Unnamed: 0']
-        
         if extra_ignore_cols:
             if isinstance(extra_ignore_cols, str):
                 ignore_cols.append(extra_ignore_cols)
@@ -117,7 +141,6 @@ class DataStreamProcessor:
                 ignore_cols.extend(extra_ignore_cols)
                 
         cols_to_drop = [c for c in ignore_cols if c in df.columns]
-        
         X = df.drop(columns=[target_label_col] + cols_to_drop, errors='ignore')
         
         # tratamento numérico
@@ -126,36 +149,24 @@ class DataStreamProcessor:
         X.replace([np.inf, -np.inf], [np.finfo(np.float32).max, np.finfo(np.float32).min], inplace=True)
         X = self._handle_missing_values(X, method=imputation_method)
 
-        # normalização
+        # normalização 
         if normalize_method:
             temp_col_names = X.columns
             temp_x_array = self._normalize_data(X, method=normalize_method)
             X = pd.DataFrame(temp_x_array, columns=temp_col_names)
 
-        # definição do target (y)
-        type_lbl = "Binário (0=Normal, 1=Attack)" if binary_label else "Multiclasse"
-        self._log(f"Target: Processando coluna '{target_label_col}' como {type_lbl}...")
-        
-        if binary_label:
-            is_benign = df[target_label_col].astype(str).str.strip().str.upper() == 'BENIGN'
-            y = np.where(is_benign, 0, 1).astype(np.int8)
-            target_names = ['Normal', 'Attack'] 
-        else:
-            le = LabelEncoder()
-            y = le.fit_transform(df[target_label_col].astype(str))
-            target_names = le.classes_.tolist()
+        # Definição do target e encoding
+        y, target_names = self._encode_labels(df[target_label_col], binary_label)
 
         # redução da dimensionalidade
         if threshold_var is not None or threshold_corr is not None or top_n_features is not None:
             self._log("Seleção de Features: Iniciando pipeline de redução de dimensionalidade...")
-            X = self._remove_features(X, y, 
-                                      threshold_var=threshold_var,
-                                      threshold_corr=threshold_corr,
-                                      top_n_features=top_n_features)
+            X = self._remove_features(X, y, threshold_var=threshold_var,
+                                      threshold_corr=threshold_corr, top_n_features=top_n_features)
         else:
             self._log("Seleção de Features: Nenhuma técnica selecionada. Mantendo todas as colunas.")
 
-        # extrai dados finais para retorno
+        # extrai dados finais para retorno 
         feature_names = X.columns.tolist()
         final_x_array = X.values
 
@@ -163,11 +174,8 @@ class DataStreamProcessor:
         if return_stream:
             self._log("Finalização: Criando objeto NumpyStream para o CapyMOA.\n")
             stream_obj = NumpyStream(
-                final_x_array, 
-                y, 
-                target_name="Class", 
-                feature_names=feature_names,
-                target_type="categorical"
+                final_x_array, y, target_name="Class", 
+                feature_names=feature_names, target_type="categorical"
             )
             return stream_obj, target_names, feature_names
         else:
