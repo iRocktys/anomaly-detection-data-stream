@@ -52,7 +52,7 @@ class AnomalyExperimentRunner:
             attack_name = self.target_names[attack_idx] if attack_idx < len(self.target_names) else f'Ataque {attack_idx}'
             bg_color = bg_colors[attack_idx % len(bg_colors)]
             
-            label_to_show = f'Ataque: {attack_name}' if attack_name not in added_attack_labels else ""
+            label_to_show = f'{attack_name}' if attack_name not in added_attack_labels else ""
             ax.axvspan(start, end, facecolor=bg_color, alpha=0.3, zorder=1, label=label_to_show)
             
             if label_to_show:
@@ -61,10 +61,17 @@ class AnomalyExperimentRunner:
         ax.set_title(f"Análise de Scores (Média Móvel - Janela {window_size})", fontsize=14, fontweight='bold')
         ax.set_ylabel("Score de Anomalia", fontsize=14)
         ax.set_xlabel("Instâncias", fontsize=14)
-        ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.15), ncol=len(results) + 2, 
+        
+        # Legendas
+        leg = ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.15), ncol=len(results) + 2, 
                   fontsize=12, frameon=False)
+        for patch in leg.get_patches():
+            patch.set_edgecolor('gray')
+            patch.set_linewidth(1.0)
+            patch.set_alpha(0.8)
+
         ax.grid(True, alpha=0.3, linestyle=':', zorder=0)
-        ax.set_ylim(0.0, 1.1)
+        # ax.set_ylim(0.0, 1.1)
         fig.subplots_adjust(bottom=0.2)
         plt.tight_layout()
         plt.show()
@@ -99,14 +106,21 @@ class AnomalyExperimentRunner:
         ax2.set_ylabel("Precision", fontsize=14)
         ax3.set_ylabel("Recall", fontsize=14)
         ax3.set_xlabel("Instâncias", fontsize=14)
-        ax3.legend(loc='upper center', bbox_to_anchor=(0.5, -0.25), ncol=len(results),
-                   fontsize=12, frameon=False)
+
+        # Legendas
+        leg = ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.20), ncol=len(results) + 2, 
+                  fontsize=12, frameon=False)
+        for patch in leg.get_patches():
+            patch.set_edgecolor('gray')
+            patch.set_linewidth(1.0)
+            patch.set_alpha(0.8)
+            
         plt.suptitle(title, fontsize=16, fontweight='bold')
         fig.subplots_adjust(bottom=0.3)
         plt.tight_layout()
         plt.show()
 
-    def display_cumulative_metrics(self, predictions_history, schema=None):
+    def display_cumulative_metrics(self, predictions_history, schema=None, window_size=0):
         print(f"\n{'='*65}")
         print(f"{'RESUMO DE MÉTRICAS ACUMULATIVAS':^65}")
         print(f"{'='*65}")
@@ -114,10 +128,10 @@ class AnomalyExperimentRunner:
         print(f"{'-'*65}")
 
         for name, data in predictions_history.items():
-            y_true_list = data['true_labels']
-            y_pred_list = data['predicted_classes']
+            # Remove o período inicial de aquecimento (warm-up) cortando a lista
+            y_true_list = data['true_labels'][window_size:] if len(data['true_labels']) > window_size else data['true_labels']
+            y_pred_list = data['predicted_classes'][window_size:] if len(data['predicted_classes']) > window_size else data['predicted_classes']
             
-            # Sklearn apenas aqui, no final (vetorizado para o acumulado real)
             f1 = f1_score(y_true_list, y_pred_list, zero_division=0) * 100
             prec = precision_score(y_true_list, y_pred_list, zero_division=0) * 100
             recall = recall_score(y_true_list, y_pred_list, zero_division=0) * 100
@@ -180,7 +194,9 @@ class AnomalyExperimentRunner:
                 alg_true_labels.append(true_label_binary)
                 alg_predicted_classes.append(predicted_class)
                 
-                evaluator_class.update(true_label_binary, predicted_class)
+                # Atualiza o avaliador APENAS após passar o período inicial (warm-up)
+                if count >= window_size:
+                    evaluator_class.update(true_label_binary, predicted_class)
                
                 try: 
                     if alg_name in ['AE', 'Autoencoder']:
@@ -191,21 +207,9 @@ class AnomalyExperimentRunner:
                 except ValueError: 
                     pass
 
-                if count > 0 and count % window_size == 0:
+                # Registra as métricas, mas ignora a primeira janela gerada no warmup
+                if count > window_size and count % window_size == 0:
                     class_metrics = evaluator_class.metrics_dict()
-                    
-                    # if count == window_size:
-                    #     print(f"\n{'='*60}")
-                    #     print(f"[DIAGNÓSTICO CAPYMOA - Algoritmo: {alg_name}]")
-                    #     print(f"Chaves no dicionário: {list(class_metrics.keys())}")
-                    #     total_ataques_reais = sum(alg_true_labels[-window_size:])
-                    #     total_ataques_preditos = sum(alg_predicted_classes[-window_size:])
-                    #     print(f"Análise desta Janela Prequencial (Tamanho {window_size}):")
-                    #     print(f" -> Ataques Reais (Ground Truth): {total_ataques_reais}")
-                    #     print(f" -> Ataques Preditos (Score > {threshold}): {total_ataques_preditos}")
-                    #     if total_ataques_preditos == 0:
-                    #         print("🚨 ALERTA: Seu modelo NÃO previu nenhum ataque nesta janela. F1 será 0.0!")
-                    #     print(f"{'='*60}\n")
                     
                     f1_val = self._get_metric_classifier(class_metrics, 'f1_score', target_class=target_class)
                     prec_val = self._get_metric_classifier(class_metrics, 'precision', target_class=target_class)
@@ -230,4 +234,4 @@ class AnomalyExperimentRunner:
 
         self.plot_score(results_scores, attack_regions, title, threshold)
         self.plot_metrics(results_metrics, attack_regions, title)
-        self.display_cumulative_metrics(predictions_history, schema)
+        self.display_cumulative_metrics(predictions_history, schema, window_size)

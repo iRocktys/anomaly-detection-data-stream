@@ -35,11 +35,11 @@ def get_anomaly_models(
             'schema': schema,
             'CLI': None,
             'random_seed': 1,
-            'window_size': 1900,
-            'number_of_trees': 30,
-            'max_depth': 7,
-            'anomaly_threshold': 0.3,
-            'size_limit': 0.41
+            'window_size': 1800,
+            'number_of_trees': 100,
+            'max_depth': 17,
+            'anomaly_threshold': 0.2,
+            'size_limit': 0.2
         }
  
         if hst_params: default_hst.update(hst_params)
@@ -50,12 +50,12 @@ def get_anomaly_models(
         default_oif = {
             'schema': schema,
             'random_seed': 1,
-            'num_trees': 32,
-            'max_leaf_samples': 32,
+            'num_trees': 100,
+            'max_leaf_samples': 16,
             'growth_criterion': 'adaptive', # 'fixed' or 'adaptive'
-            'subsample': 1.0,
+            'subsample': 0.9,
             'window_size': 2048,
-            'branching_factor': 2,
+            'branching_factor': 4,
             'split': 'axisparallel',
             'n_jobs': 1
         }
@@ -67,9 +67,9 @@ def get_anomaly_models(
     if 'AE' in selected_models:
         default_ae = {
             'schema': schema,
-            'hidden_layer': 10,
-            'learning_rate': 0.001,
-            'threshold': 0.3,
+            'hidden_layer': 5,
+            'learning_rate': 0.0003,
+            'threshold': 0.2,
             'random_seed': 1
         }
         
