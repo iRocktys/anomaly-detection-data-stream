@@ -198,13 +198,18 @@ class AnomalyExperimentRunner:
                 if count >= window_size:
                     evaluator_class.update(true_label_binary, predicted_class)
                
-                try: 
-                    if alg_name in ['AE', 'Autoencoder']:
-                        if predicted_class == 0:
-                            learner.train(instance)
-                    else:
-                        learner.train(instance)
-                except ValueError: 
+                # try: 
+                #     if alg_name in ['AE', 'Autoencoder']:
+                #         if predicted_class == 0:
+                #             learner.train(instance)
+                #     else:
+                #         learner.train(instance)
+                # except ValueError: 
+                #     pass
+
+                try:
+                    learner.update(instance)
+                except ValueError:
                     pass
 
                 # Registra as métricas, mas ignora a primeira janela gerada no warmup

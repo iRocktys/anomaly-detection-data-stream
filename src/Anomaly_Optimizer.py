@@ -77,13 +77,9 @@ class AnomalyOptunaOptimizer:
             y_true_list.append(binary_true_label)
             y_pred_list.append(predicted_class)
 
-            try: 
-                if model_name == 'AE':
-                    if predicted_class == 0:
-                        model.train(instance)
-                else:
-                    model.train(instance)
-            except ValueError: 
+            try:
+                model.update(instance)
+            except ValueError:
                 pass
             
             instance_idx += 1
