@@ -7,15 +7,22 @@ class ClassificationExperimentRunner:
     def __init__(self, target_names=None):
         self.target_names = target_names if target_names is not None else ['Normal', 'Ataque']
 
-    def _get_metric_class(self, m_dict, metric_name, target_class, fallback_val=0.0):
-        val = m_dict.get(f'{metric_name}_{target_class}')
-        if val is None or np.isnan(val):
-            val = m_dict.get(metric_name, fallback_val)
+    def _get_metric_class(self, metrics_dict, metric_name, target_class=1):
+        norm_metrics = {str(k).lower(): v for k, v in metrics_dict.items()}
+        metric_name = str(metric_name).lower()
         
-        if val is None or np.isnan(val) or np.isinf(val):
-            return 0.0
+        if target_class is None:
+            val_0 = norm_metrics.get(f'{metric_name}_0', 0.0)
+            val_1 = norm_metrics.get(f'{metric_name}_1', 0.0)
             
-        return float(val)
+            val_0 = 0.0 if val_0 is None or np.isnan(val_0) else float(val_0)
+            val_1 = 0.0 if val_1 is None or np.isnan(val_1) else float(val_1)
+            
+            return (val_0 + val_1) / 2.0
+            
+        else:
+            val = norm_metrics.get(f'{metric_name}_{target_class}')
+            return float(val) if val is not None and not np.isnan(val) else 0.0
 
     def _get_metric_classifier(self, y_true, y_pred, target_class):
         if len(y_true) == 0:
@@ -32,7 +39,7 @@ class ClassificationExperimentRunner:
             
         return f1 * 100.0, prec * 100.0, rec * 100.0
 
-    def print_metrics(self, results, target_class):
+    def print_metrics(self, results, target_class, warmup_instances=0):
         print("\n" + "="*80)
         print(f"{'RELATÓRIO ACUMULATIVO ':^80}")
         print("="*80)
@@ -40,7 +47,11 @@ class ClassificationExperimentRunner:
         print("-" * 80)
         
         for name, data in results.items():
-            f1, prec, rec = self._get_metric_classifier(data['y_true'], data['y_pred'], target_class)
+            # Aplica o slice para ignorar o período de warm-up nas métricas acumulativas
+            y_true_list = data['y_true'][warmup_instances:] if len(data['y_true']) > warmup_instances else data['y_true']
+            y_pred_list = data['y_pred'][warmup_instances:] if len(data['y_pred']) > warmup_instances else data['y_pred']
+
+            f1, prec, rec = self._get_metric_classifier(y_true_list, y_pred_list, target_class)
             print(f"{name:<25} | {prec:>8.2f}   | {rec:>8.2f}   | {f1:>8.2f}")
         print("="*80 + "\n")
 
@@ -77,9 +88,9 @@ class ClassificationExperimentRunner:
             ax.grid(True, alpha=0.3, linestyle=':', zorder=0)
 
         ax1.set_title(f"{title} (Resolução de {window_size} instâncias)", fontsize=14, fontweight='bold')
-        ax1.set_ylabel("F1-Score", fontsize=12)
-        ax2.set_ylabel("Precision", fontsize=12)
-        ax3.set_ylabel("Recall", fontsize=12)
+        ax1.set_ylabel("Precision (%)", fontsize=12)
+        ax2.set_ylabel("Recall (%)", fontsize=12)
+        ax3.set_ylabel("F1-Score (%)", fontsize=12)
         ax3.set_xlabel("Instâncias", fontsize=14)
 
         handles, labels = ax1.get_legend_handles_labels()
@@ -94,7 +105,7 @@ class ClassificationExperimentRunner:
         plt.tight_layout(rect=[0, 0.08, 1, 1])
         plt.show()
 
-    def run_classification_evaluation(self, stream, algorithms, window_size=1000, title="Avaliação Prequencial", target_class=1):
+    def run_classification_evaluation(self, stream, algorithms, window_size=1000, title="Avaliação Prequencial", warmup_instances=0, target_class=1):
         results = {}
         attack_regions = []
         
@@ -141,8 +152,10 @@ class ClassificationExperimentRunner:
                 prediction = model.predict(instance)
                 if prediction is None:
                     prediction = 0
-                    
-                evaluator.update(true_label_multiclass, prediction)
+                
+                # Só computa métricas no CapyMOA se o warmup tiver passado
+                if instance_idx >= warmup_instances:
+                    evaluator.update(true_label_multiclass, prediction)
                 
                 binary_prediction = 1 if prediction > 0 else 0
                 res['y_true'].append(binary_true_label)
@@ -150,7 +163,8 @@ class ClassificationExperimentRunner:
 
                 model.train(instance)
 
-                if (instance_idx + 1) % window_size == 0:
+                # Coleta as métricas do gráfico ignorando o warmup
+                if instance_idx >= warmup_instances and instance_idx > 0 and instance_idx % window_size == 0:
                     res['instances'].append(instance_idx)
                     m_dict = evaluator.metrics_dict()
                     
@@ -163,7 +177,5 @@ class ClassificationExperimentRunner:
         if in_attack:
             attack_regions.append((start_idx, instance_idx - 1, current_attack_idx))
             
-        self.print_metrics(results, target_class)
+        self.print_metrics(results, target_class, warmup_instances)
         self.plot(results, attack_regions=attack_regions, title=title, window_size=window_size)
-            
-        # return results, attack_regions

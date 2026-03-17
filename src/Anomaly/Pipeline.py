@@ -28,6 +28,21 @@ class AnomalyExperimentRunner:
         else:
             val = norm_metrics.get(f'{metric_name}_{target_class}')
             return float(val) if val is not None and not np.isnan(val) else 0.0
+
+    def _calc_sklearn_metrics(self, y_true, y_pred, target_class):
+        if len(y_true) == 0:
+            return 0.0, 0.0, 0.0
+            
+        if target_class is None:
+            f1 = f1_score(y_true, y_pred, average='macro', zero_division=0)
+            prec = precision_score(y_true, y_pred, average='macro', zero_division=0)
+            rec = recall_score(y_true, y_pred, average='macro', zero_division=0)
+        else:
+            f1 = f1_score(y_true, y_pred, pos_label=target_class, average='binary', zero_division=0)
+            prec = precision_score(y_true, y_pred, pos_label=target_class, average='binary', zero_division=0)
+            rec = recall_score(y_true, y_pred, pos_label=target_class, average='binary', zero_division=0)
+            
+        return f1 * 100.0, prec * 100.0, rec * 100.0
     
     def plot_score(self, results, attack_regions, title, threshold=0.5):
         fig, ax = plt.subplots(figsize=(15, 6)) 
@@ -62,7 +77,6 @@ class AnomalyExperimentRunner:
         ax.set_ylabel("Score de Anomalia", fontsize=14)
         ax.set_xlabel("Instâncias", fontsize=14)
         
-        # Legendas
         leg = ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.15), ncol=len(results) + 2, 
                   fontsize=12, frameon=False)
         for patch in leg.get_patches():
@@ -71,7 +85,6 @@ class AnomalyExperimentRunner:
             patch.set_alpha(0.8)
 
         ax.grid(True, alpha=0.3, linestyle=':', zorder=0)
-        # ax.set_ylim(0.0, 1.1)
         fig.subplots_adjust(bottom=0.2)
         plt.tight_layout()
         plt.show()
@@ -103,12 +116,11 @@ class AnomalyExperimentRunner:
             ax.tick_params(axis='both', which='major', labelsize=12)
         
         ax1.set_title(f"{title} (Resolução de {window_size} instâncias)", fontsize=14, fontweight='bold')
-        ax1.set_ylabel("F1-Score", fontsize=14)
-        ax2.set_ylabel("Precision", fontsize=14)
-        ax3.set_ylabel("Recall", fontsize=14)
+        ax1.set_ylabel("F1-Score (%)", fontsize=14)
+        ax2.set_ylabel("Precision (%)", fontsize=14)
+        ax3.set_ylabel("Recall (%)", fontsize=14)
         ax3.set_xlabel("Instâncias", fontsize=14)
 
-        # Legendas
         leg = ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.20), ncol=len(results) + 2, 
                   fontsize=12, frameon=False)
         for patch in leg.get_patches():
@@ -120,27 +132,24 @@ class AnomalyExperimentRunner:
         plt.tight_layout()
         plt.show()
 
-    def display_cumulative_metrics(self, predictions_history, schema=None, window_size=0):
+    def display_cumulative_metrics(self, predictions_history, warmup_instances=0, target_class=1):
         print(f"\n{'='*65}")
         print(f"{'RELATÓRIO ACUMULATIVO':^65}")
         print(f"{'='*65}")
-        print(f"{'Algoritmo':<25} | {'F1':<10} | {'Prec':<10} | {'Rec':<10}")
+        print(f"{'Algoritmo':<25} | {'F1 (%)':<10} | {'Prec (%)':<10} | {'Rec (%)':<10}")
         print(f"{'-'*65}")
 
         for name, data in predictions_history.items():
-            # Remove o período inicial de aquecimento (warm-up) cortando a lista
-            y_true_list = data['true_labels'][window_size:] if len(data['true_labels']) > window_size else data['true_labels']
-            y_pred_list = data['predicted_classes'][window_size:] if len(data['predicted_classes']) > window_size else data['predicted_classes']
+            y_true_list = data['true_labels'][warmup_instances:] if len(data['true_labels']) > warmup_instances else data['true_labels']
+            y_pred_list = data['predicted_classes'][warmup_instances:] if len(data['predicted_classes']) > warmup_instances else data['predicted_classes']
             
-            f1 = f1_score(y_true_list, y_pred_list, zero_division=0) * 100
-            prec = precision_score(y_true_list, y_pred_list, zero_division=0) * 100
-            recall = recall_score(y_true_list, y_pred_list, zero_division=0) * 100
+            f1, prec, recall = self._calc_sklearn_metrics(y_true_list, y_pred_list, target_class)
 
             print(f"{name:<25} | {f1:<10.2f} | {prec:<10.2f} | {recall:<10.2f}")
         
         print(f"{'='*65}\n")
 
-    def _run_anomaly_evaluation(self, stream, algorithms, window_size, title, target_class=None, threshold=0.5):
+    def _run_anomaly_evaluation(self, stream, algorithms, window_size, title, warmup_instances=0, target_class=None, threshold=0.5):
         results_metrics = {}
         results_scores = {}
         attack_regions = []
@@ -194,26 +203,15 @@ class AnomalyExperimentRunner:
                 alg_true_labels.append(true_label_binary)
                 alg_predicted_classes.append(predicted_class)
                 
-                # Atualiza o avaliador APENAS após passar o período inicial (warm-up)
-                if count >= window_size:
+                if count >= warmup_instances:
                     evaluator_class.update(true_label_binary, predicted_class)
                
-                # try: 
-                #     if alg_name in ['AE', 'Autoencoder']:
-                #         if predicted_class == 0:
-                #             learner.train(instance)
-                #     else:
-                #         learner.train(instance)
-                # except ValueError: 
-                #     pass
-
                 try:
                     learner.train(instance)
                 except ValueError:
                     pass
 
-                # Registra as métricas, mas ignora a primeira janela gerada no warmup
-                if count > window_size and count % window_size == 0:
+                if count >= warmup_instances and count > 0 and count % window_size == 0:
                     class_metrics = evaluator_class.metrics_dict()
                     
                     f1_val = self._get_metric_classifier(class_metrics, 'f1_score', target_class=target_class)
@@ -237,6 +235,6 @@ class AnomalyExperimentRunner:
                 'predicted_classes': alg_predicted_classes
             }
 
+        self.display_cumulative_metrics(predictions_history, warmup_instances=warmup_instances, target_class=target_class)
         self.plot_score(results_scores, attack_regions, title, threshold)
         self.plot_metrics(results_metrics, attack_regions, title, window_size)
-        self.display_cumulative_metrics(predictions_history, schema, window_size)
