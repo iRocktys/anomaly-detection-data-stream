@@ -1,15 +1,14 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from capymoa.drift.detectors import ADWIN
-from capymoa.evaluation import ClassificationWindowedEvaluator, ClassificationEvaluator
+from sklearn.metrics import f1_score, precision_score, recall_score
+from capymoa.evaluation import ClassificationEvaluator
 
 class ClassificationExperimentRunner:
-    def __init__(self):
-        pass
+    def __init__(self, target_names=None):
+        self.target_names = target_names if target_names is not None else ['Normal', 'Ataque']
 
-    def _get_metric_class_0(self, m_dict, metric_name, fallback_val=0.0):
-        """Busca a métrica focada na Classe 0 (Normal) e já converte para 0-100"""
-        val = m_dict.get(f'{metric_name}_0')
+    def _get_metric_class(self, m_dict, metric_name, target_class, fallback_val=0.0):
+        val = m_dict.get(f'{metric_name}_{target_class}')
         if val is None or np.isnan(val):
             val = m_dict.get(metric_name, fallback_val)
         
@@ -18,7 +17,22 @@ class ClassificationExperimentRunner:
             
         return float(val)
 
-    def print_metrics(self, results):
+    def _get_metric_classifier(self, y_true, y_pred, target_class):
+        if len(y_true) == 0:
+            return 0.0, 0.0, 0.0
+
+        if target_class is None:
+            f1 = f1_score(y_true, y_pred, average='macro', zero_division=0)
+            prec = precision_score(y_true, y_pred, average='macro', zero_division=0)
+            rec = recall_score(y_true, y_pred, average='macro', zero_division=0)
+        else:
+            f1 = f1_score(y_true, y_pred, pos_label=target_class, average='binary', zero_division=0)
+            prec = precision_score(y_true, y_pred, pos_label=target_class, average='binary', zero_division=0)
+            rec = recall_score(y_true, y_pred, pos_label=target_class, average='binary', zero_division=0)
+            
+        return f1 * 100.0, prec * 100.0, rec * 100.0
+
+    def print_metrics(self, results, target_class):
         print("\n" + "="*80)
         print(f"{'RELATÓRIO ACUMULATIVO ':^80}")
         print("="*80)
@@ -26,21 +40,16 @@ class ClassificationExperimentRunner:
         print("-" * 80)
         
         for name, data in results.items():
-            c_eval = data['cumulative_evaluator']
-            m_dict = c_eval.metrics_dict()
-            
-            prec = self._get_metric_class_0(m_dict, 'precision')
-            rec = self._get_metric_class_0(m_dict, 'recall')
-            f1 = self._get_metric_class_0(m_dict, 'f1_score')
-            
+            f1, prec, rec = self._get_metric_classifier(data['y_true'], data['y_pred'], target_class)
             print(f"{name:<25} | {prec:>8.2f}   | {rec:>8.2f}   | {f1:>8.2f}")
         print("="*80 + "\n")
 
-    def plot(self, results, attack_regions=None, title="Métricas Janeladas (Foco: Tráfego Normal)"):
-        # Ajustado para 3 subplots exatos
-        fig, axes = plt.subplots(3, 1, figsize=(14, 12), sharex=True)
+    def plot(self, results, attack_regions=None, title="Métricas", window_size=1000):
+        fig, axes = plt.subplots(3, 1, figsize=(15, 10), sharex=True)
         (ax1, ax2, ax3) = axes
-        colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd']
+        
+        colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2']
+        bg_colors = ['#F7C5CD', '#C5D9F7', '#C5F7C5', '#F7E6C5', '#E3C5F7', '#F7D9C5', '#C5F7E6']
 
         for i, (name, data) in enumerate(results.items()):
             color = colors[i % len(colors)]
@@ -48,109 +57,113 @@ class ClassificationExperimentRunner:
             
             def clean(d_list): return [0.0 if (v is None or np.isnan(v)) else v for v in d_list]
 
-            # Linhas de métricas limitadas às 3 solicitadas
-            ax1.plot(x_axis, clean(data['precision']), label=name, marker='o', color=color, linewidth=2, zorder=3)
-            ax2.plot(x_axis, clean(data['recall']), label=name, marker='o', color=color, linewidth=2, zorder=3)
-            ax3.plot(x_axis, clean(data['f1']), label=name, marker='o', color=color, linewidth=2, zorder=3)
+            ax1.plot(x_axis, clean(data['precision']), label=name, color=color, alpha=0.85, linewidth=1.5, marker='o', zorder=3)
+            ax2.plot(x_axis, clean(data['recall']), label=name, color=color, alpha=0.85, linewidth=1.5, marker='o', zorder=3)
+            ax3.plot(x_axis, clean(data['f1']), label=name, color=color, alpha=0.85, linewidth=1.5, marker='o', zorder=3)
 
-            # Drifts
-            for drift_pos in data['drifts']:
-                style = {'color': 'black', 'linestyle': '--', 'alpha': 0.6, 'linewidth': 1.5, 'zorder': 2}
-                for ax in axes: ax.axvline(x=drift_pos, **style)
-
-        # Fundo Rosa e Configurações de Eixos
+        added_attack_labels = set()
         for ax in axes:
             if attack_regions:
-                added_lbl = False
-                for start, end in attack_regions:
-                    lbl = "Ataque" if not added_lbl else ""
-                    ax.axvspan(start, end, color='#ffb6c1', alpha=0.4, label=lbl, zorder=0)
-                    added_lbl = True
+                for start, end, attack_idx in attack_regions:
+                    attack_name = self.target_names[attack_idx] if attack_idx < len(self.target_names) else f'Ataque {attack_idx}'
+                    bg_color = bg_colors[attack_idx % len(bg_colors)]
+                    
+                    label_to_show = f'{attack_name}' if attack_name not in added_attack_labels and ax == ax1 else ""
+                    ax.axvspan(start, end, facecolor=bg_color, alpha=0.3, zorder=1, label=label_to_show)
+                    
+                    if label_to_show:
+                        added_attack_labels.add(attack_name)
             
-            ax.grid(True, alpha=0.3, zorder=1)
-            # Trava os eixos perfeitamente entre 0 e 100
-            # ax.set_ylim(-3, 103) 
+            ax.grid(True, alpha=0.3, linestyle=':', zorder=0)
 
-        ax1.set_ylabel("Precision (%)", fontsize=12)
-        ax3.legend(loc='lower right', fontsize=14)
-        ax2.set_ylabel("Recall (%)", fontsize=12)
-        ax3.set_ylabel("F1-Score (%)", fontsize=12)
+        ax1.set_title(f"{title} (Resolução de {window_size} instâncias)", fontsize=14, fontweight='bold')
+        ax1.set_ylabel("F1-Score", fontsize=12)
+        ax2.set_ylabel("Precision", fontsize=12)
+        ax3.set_ylabel("Recall", fontsize=12)
         ax3.set_xlabel("Instâncias", fontsize=14)
 
-        plt.suptitle(title, fontsize=16, fontweight='bold')
-        plt.tight_layout(rect=[0, 0.03, 1, 0.98])
+        handles, labels = ax1.get_legend_handles_labels()
+        leg = fig.legend(handles, labels, loc='lower center', bbox_to_anchor=(0.5, 0.02), ncol=len(results) + len(added_attack_labels), 
+                         fontsize=12, frameon=False)
+        for patch in leg.get_patches():
+            patch.set_edgecolor('gray')
+            patch.set_linewidth(1.0)
+            patch.set_alpha(0.8)
+
+        fig.subplots_adjust(bottom=0.15)
+        plt.tight_layout(rect=[0, 0.08, 1, 1])
         plt.show()
 
-    def run_experiments(self, stream, models, window_size=1000, logging=True):
+    def run_classification_evaluation(self, stream, algorithms, window_size=1000, title="Avaliação Prequencial", target_class=1):
         results = {}
         attack_regions = []
-        in_attack = False
-        start_attack_idx = 0
         
-        # Inicializa estruturas apenas com as 3 métricas
-        for name in models:
+        in_attack = False
+        start_idx = 0
+        current_attack_idx = None
+        instance_idx = 0 
+        
+        for name in algorithms:
             results[name] = {
                 'instances': [],
                 'f1': [], 'precision': [], 'recall': [], 
-                'drifts': [],
-                'windowed_evaluator': ClassificationWindowedEvaluator(schema=stream.get_schema(), window_size=window_size),
-                'cumulative_evaluator': ClassificationEvaluator(schema=stream.get_schema()),
-                'adwin': ADWIN()
+                'y_true': [], 'y_pred': [],
+                'evaluator': ClassificationEvaluator(schema=stream.get_schema())
             }
 
-        count = 0
         stream.restart()
 
         while stream.has_more_instances():
             instance = stream.next_instance()
+            true_label_multiclass = instance.y_index 
             
-            # Detecção de Regiões de Ataque
-            is_attack = (instance.y_index >= 1)
-            if is_attack and not in_attack:
-                in_attack = True
-                start_attack_idx = count
-            elif not is_attack and in_attack:
-                in_attack = False
-                attack_regions.append((start_attack_idx, count))
+            if true_label_multiclass != 0: 
+                if not in_attack:
+                    in_attack = True
+                    start_idx = instance_idx
+                    current_attack_idx = true_label_multiclass
+                elif true_label_multiclass != current_attack_idx:
+                    attack_regions.append((start_idx, instance_idx - 1, current_attack_idx))
+                    start_idx = instance_idx
+                    current_attack_idx = true_label_multiclass
+            else:
+                if in_attack:
+                    attack_regions.append((start_idx, instance_idx - 1, current_attack_idx))
+                    in_attack = False
+                    current_attack_idx = None
+            
+            binary_true_label = 1 if true_label_multiclass > 0 else 0
 
-            for name, model in models.items():
+            for name, model in algorithms.items():
                 res = results[name]
-                w_eval = res['windowed_evaluator']
-                c_eval = res['cumulative_evaluator']
+                evaluator = res['evaluator']
 
-                # Predição
                 prediction = model.predict(instance)
-                w_eval.update(instance.y_index, prediction)
-                c_eval.update(instance.y_index, prediction)
+                if prediction is None:
+                    prediction = 0
+                    
+                evaluator.update(true_label_multiclass, prediction)
+                
+                binary_prediction = 1 if prediction > 0 else 0
+                res['y_true'].append(binary_true_label)
+                res['y_pred'].append(binary_prediction)
 
-                # Drift
-                # error = 0.0 if prediction == instance.y_index else 1.0
-                # res['adwin'].add_element(error)
-                # if res['adwin'].detected_change():
-                #     res['drifts'].append(count)
-
-                # Treino
                 model.train(instance)
 
-                # Coleta de Métricas Janeladas
-                if (count + 1) % window_size == 0:
-                    res['instances'].append(count)
+                if (instance_idx + 1) % window_size == 0:
+                    res['instances'].append(instance_idx)
+                    m_dict = evaluator.metrics_dict()
                     
-                    m_dict = w_eval.metrics_dict()
-                    
-                    # Extração direta e focada na Classe 0 (Normal)
-                    res['precision'].append(self._get_metric_class_0(m_dict, 'precision'))
-                    res['recall'].append(self._get_metric_class_0(m_dict, 'recall'))
-                    res['f1'].append(self._get_metric_class_0(m_dict, 'f1_score'))
-                    
-                    if logging:
-                        print(f"[{name}] Inst: {count} | Prec: {res['precision'][-1]:>6.2f}% | Rec: {res['recall'][-1]:>6.2f}% | F1: {res['f1'][-1]:>6.2f}%")
+                    res['precision'].append(self._get_metric_class(m_dict, 'precision', target_class))
+                    res['recall'].append(self._get_metric_class(m_dict, 'recall', target_class))
+                    res['f1'].append(self._get_metric_class(m_dict, 'f1_score', target_class))
 
-            count += 1
+            instance_idx += 1
         
         if in_attack:
-            attack_regions.append((start_attack_idx, count))
+            attack_regions.append((start_idx, instance_idx - 1, current_attack_idx))
             
-        return results, attack_regions
-
-    
+        self.print_metrics(results, target_class)
+        self.plot(results, attack_regions=attack_regions, title=title, window_size=window_size)
+            
+        # return results, attack_regions

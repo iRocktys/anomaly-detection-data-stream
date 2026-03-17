@@ -76,7 +76,7 @@ class AnomalyExperimentRunner:
         plt.tight_layout()
         plt.show()
 
-    def plot_metrics(self, results, attack_regions, title):
+    def plot_metrics(self, results, attack_regions, title, window_size):
         fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(15, 10), sharex=True)
         colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2'] 
         bg_colors = ['#F7C5CD', '#C5D9F7', '#C5F7C5', '#F7E6C5', '#E3C5F7', '#F7D9C5', '#C5F7E6']
@@ -102,6 +102,7 @@ class AnomalyExperimentRunner:
             ax.grid(True, alpha=0.3, linestyle=':', zorder=0)
             ax.tick_params(axis='both', which='major', labelsize=12)
         
+        ax1.set_title(f"{title} (Resolução de {window_size} instâncias)", fontsize=14, fontweight='bold')
         ax1.set_ylabel("F1-Score", fontsize=14)
         ax2.set_ylabel("Precision", fontsize=14)
         ax3.set_ylabel("Recall", fontsize=14)
@@ -115,14 +116,13 @@ class AnomalyExperimentRunner:
             patch.set_linewidth(1.0)
             patch.set_alpha(0.8)
             
-        plt.suptitle(title, fontsize=16, fontweight='bold')
         fig.subplots_adjust(bottom=0.3)
         plt.tight_layout()
         plt.show()
 
     def display_cumulative_metrics(self, predictions_history, schema=None, window_size=0):
         print(f"\n{'='*65}")
-        print(f"{'RESUMO DE MÉTRICAS ACUMULATIVAS':^65}")
+        print(f"{'RELATÓRIO ACUMULATIVO':^65}")
         print(f"{'='*65}")
         print(f"{'Algoritmo':<25} | {'F1':<10} | {'Prec':<10} | {'Rec':<10}")
         print(f"{'-'*65}")
@@ -238,5 +238,5 @@ class AnomalyExperimentRunner:
             }
 
         self.plot_score(results_scores, attack_regions, title, threshold)
-        self.plot_metrics(results_metrics, attack_regions, title)
+        self.plot_metrics(results_metrics, attack_regions, title, window_size)
         self.display_cumulative_metrics(predictions_history, schema, window_size)
