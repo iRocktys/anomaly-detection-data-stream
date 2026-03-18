@@ -2,6 +2,7 @@ from sklearn.metrics import f1_score, precision_score, recall_score
 import numpy as np
 import matplotlib.pyplot as plt
 from capymoa.evaluation import ClassificationEvaluator
+from src.Anomaly.Threshold import DSPOT
 
 class AnomalyExperimentRunner:
     def __init__(self, target_names):
@@ -237,4 +238,153 @@ class AnomalyExperimentRunner:
 
         self.display_cumulative_metrics(predictions_history, warmup_instances=warmup_instances, target_class=target_class)
         self.plot_score(results_scores, attack_regions, title, threshold)
+        self.plot_metrics(results_metrics, attack_regions, title, window_size)
+
+    def plot_dspot_score(self, results, attack_regions, title):
+        fig, ax = plt.subplots(figsize=(15, 6)) 
+        
+        colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2']
+        bg_colors = ['#F7C5CD', '#C5D9F7', '#C5F7C5', '#F7E6C5', '#E3C5F7', '#F7D9C5', '#C5F7E6']
+        
+        window_size = 50
+        
+        for i, (name, data) in enumerate(results.items()):
+            color = colors[i % len(colors)]
+            scores = np.array(data['scores'])
+            thresholds = np.array(data['thresholds'])
+            trends = np.array(data['trends'])
+            
+            instances = np.arange(len(scores))
+            
+            # Aplicando média móvel para plotagem consistente com as janelas de métrica
+            def moving_avg(arr, w):
+                return np.array([np.mean(arr[max(0, j-w):j+1]) for j in range(len(arr))])
+                
+            mov_scores = moving_avg(scores, window_size)
+            mov_thresholds = moving_avg(thresholds, window_size)
+            mov_trends = moving_avg(trends, window_size)
+
+            ax.plot(instances, mov_scores, color=color, alpha=0.85, linewidth=1.5, label=f'{name} (Score)', zorder=3)
+            ax.plot(instances, mov_trends, color='black', alpha=0.5, linestyle='-.', linewidth=1.5, label=f'Tendência DSPOT', zorder=3)
+            ax.plot(instances, mov_thresholds, color='red', alpha=0.8, linestyle='--', linewidth=2, label=f'Limiar DSPOT (zq)', zorder=4)
+
+        added_attack_labels = set()
+        for start, end, attack_idx in attack_regions:
+            attack_name = self.target_names[attack_idx] if attack_idx < len(self.target_names) else f'Ataque {attack_idx}'
+            bg_color = bg_colors[attack_idx % len(bg_colors)]
+            
+            label_to_show = f'{attack_name}' if attack_name not in added_attack_labels else ""
+            ax.axvspan(start, end, facecolor=bg_color, alpha=0.3, zorder=1, label=label_to_show)
+            
+            if label_to_show:
+                added_attack_labels.add(attack_name)
+
+        ax.set_title(f"{title} - EVT DSPOT (Média Móvel - Janela {window_size})", fontsize=14, fontweight='bold')
+        ax.set_ylabel("Score de Anomalia", fontsize=14)
+        ax.set_xlabel("Instâncias", fontsize=14)
+        
+        leg = ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.15), ncol=3, fontsize=12, frameon=False)
+        for patch in leg.get_patches():
+            patch.set_edgecolor('gray')
+            patch.set_linewidth(1.0)
+            patch.set_alpha(0.8)
+
+        ax.grid(True, alpha=0.3, linestyle=':', zorder=0)
+        fig.subplots_adjust(bottom=0.2)
+        plt.tight_layout()
+        plt.show()
+
+    def _run_anomaly_DSPOT(self, stream, algorithms, window_size, title, warmup_instances=0, target_class=None, dspot_q=1e-3, dspot_depth=50):
+        results_metrics = {}
+        results_scores = {}
+        attack_regions = []
+        
+        predictions_history = {}
+        schema = stream.get_schema()
+
+        for alg_idx, (alg_name, learner) in enumerate(algorithms.items()):
+            stream.restart()
+            evaluator_class = ClassificationEvaluator(schema=schema, window_size=window_size)
+            dspot = DSPOT(q=dspot_q, depth=dspot_depth)
+            
+            history = {'instances': [], 'f1_score': [], 'precision': [], 'recall': []}
+            results_scores[alg_name] = {'scores': [], 'thresholds': [], 'trends': []}
+            
+            alg_true_labels = []
+            alg_predicted_classes = []
+            
+            count = 0
+            in_attack = False
+            start_attack = 0
+            current_attack_label = None
+
+            while stream.has_more_instances():
+                instance = stream.next_instance()
+                
+                true_label_multiclass = instance.y_index 
+                true_label_binary = 1 if true_label_multiclass != self.normal_class_idx else 0
+                
+                if alg_idx == 0:
+                    is_attack = (true_label_binary == 1)
+                    
+                    if is_attack:
+                        if not in_attack:
+                            in_attack = True
+                            start_attack = count
+                            current_attack_label = true_label_multiclass
+                        elif current_attack_label != true_label_multiclass:
+                            attack_regions.append((start_attack, count, current_attack_label))
+                            start_attack = count
+                            current_attack_label = true_label_multiclass
+                    else:
+                        if in_attack:
+                            in_attack = False
+                            attack_regions.append((start_attack, count, current_attack_label))
+
+                score = learner.score_instance(instance) 
+                
+                # DSPOT processando o score e atualizando o threshold em streaming
+                predicted_class, dyn_thresh, local_trend = dspot.update_and_predict(score, warmup_instances)
+                
+                results_scores[alg_name]['scores'].append(score)
+                results_scores[alg_name]['thresholds'].append(dyn_thresh)
+                results_scores[alg_name]['trends'].append(local_trend)
+                
+                alg_true_labels.append(true_label_binary)
+                alg_predicted_classes.append(predicted_class)
+                
+                if count >= warmup_instances:
+                    evaluator_class.update(true_label_binary, predicted_class)
+               
+                try:
+                    learner.train(instance)
+                except ValueError:
+                    pass
+
+                if count >= warmup_instances and count > 0 and count % window_size == 0:
+                    class_metrics = evaluator_class.metrics_dict()
+                    
+                    f1_val = self._get_metric_classifier(class_metrics, 'f1_score', target_class=target_class)
+                    prec_val = self._get_metric_classifier(class_metrics, 'precision', target_class=target_class)
+                    recall_val = self._get_metric_classifier(class_metrics, 'recall', target_class=target_class)
+
+                    history['instances'].append(count)
+                    history['f1_score'].append(f1_val)
+                    history['precision'].append(prec_val)
+                    history['recall'].append(recall_val)
+                        
+                count += 1
+                
+            if alg_idx == 0 and in_attack:
+                attack_regions.append((start_attack, count, current_attack_label))
+                
+            results_metrics[alg_name] = history
+            
+            predictions_history[alg_name] = {
+                'true_labels': alg_true_labels,
+                'predicted_classes': alg_predicted_classes
+            }
+
+        self.display_cumulative_metrics(predictions_history, warmup_instances=warmup_instances, target_class=target_class)
+        self.plot_dspot_score(results_scores, attack_regions, title)
         self.plot_metrics(results_metrics, attack_regions, title, window_size)

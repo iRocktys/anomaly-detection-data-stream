@@ -67,9 +67,9 @@ def get_anomaly_models(
     if 'AE' in selected_models:
         default_ae = {
             'schema': schema,
-            'hidden_layer': 5,
-            'learning_rate': 0.000116,
-            'threshold': 0.2,
+            'hidden_layer': 2,
+            'learning_rate': 0.00012564,
+            'threshold': 0.4,
             'random_seed': 1
         }
         # threshold dinamico = 0.42-0.43

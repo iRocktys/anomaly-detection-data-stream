@@ -1,65 +1,140 @@
 import numpy as np
+from scipy.optimize import minimize
 from collections import deque
 
-class RollingZScore:
-    def __init__(self, window_size=500, k=3.0):
-        self.window = deque(maxlen=window_size)
-        self.k = k
+class DSPOT:
+    def __init__(self, q=1e-3, depth=50):
+        self.q = q
+        self.d = depth
+        self.W = deque(maxlen=depth)
+        self.peaks = []
+        self.t = None
+        self.zq = None
+        self.k = 0
+        self.N_t = 0
+        self.gamma = None
+        self.sigma = None
+        self.init_buffer = []
+        self.M = 0.0
 
-    def update_and_predict(self, score):
-        if len(self.window) < 10:
-            self.window.append(score)
-            return 0
-        mean, std = np.mean(self.window), max(np.std(self.window), 1e-5)
-        threshold = mean + (self.k * std)
-        is_anomaly = 1 if score > threshold else 0
-        if not is_anomaly: self.window.append(score)
-        return is_anomaly
+    def _log_likelihood(self, gamma, sigma, Y):
+        if sigma <= 0:
+            return -np.inf
+        if gamma == 0:
+            return -len(Y) * np.log(sigma) - np.sum(Y) / sigma
+        
+        val = 1 + (gamma / sigma) * Y
+        if np.any(val <= 0):
+            return -np.inf
+        return -len(Y) * np.log(sigma) - (1 + 1/gamma) * np.sum(np.log(val))
 
-class DynamicQuantile:
-    def __init__(self, window_size=500, quantile=0.95):
-        self.window = deque(maxlen=window_size)
-        self.quantile = quantile
+    def _grimshaw(self, Y):
+        Y = np.array(Y)
+        Y_m, Y_M, Y_mean = np.min(Y), np.max(Y), np.mean(Y)
 
-    def update_and_predict(self, score):
-        self.window.append(score)
-        if len(self.window) < 10: return 0
-        threshold = np.quantile(self.window, self.quantile)
-        return 1 if score > threshold else 0
+        def u(x):
+            return np.mean(1 / (1 + x * Y))
+        def v(x):
+            return 1 + np.mean(np.log1p(x * Y))
+        def w(x):
+            return (u(x) * v(x) - 1)**2
 
-class RollingOtsu:
-    def __init__(self, window_size=500, bins=50):
-        self.window = deque(maxlen=window_size)
-        self.bins = bins
+        epsilon = 1e-8
+        bounds1 = (-1/Y_M + epsilon, -epsilon)
+        
+        if Y_m < epsilon:
+            Y_m = epsilon
+            
+        min_bound2 = 2 * (Y_mean - Y_m) / (Y_mean * Y_m)
+        max_bound2 = 2 * (Y_mean - Y_m) / (Y_m**2)
+        bounds2 = (min_bound2, max_bound2 + epsilon) 
 
-    def update_and_predict(self, score):
-        self.window.append(score)
-        if len(self.window) < 50: return 0
-        hist, bin_edges = np.histogram(self.window, bins=self.bins, range=(0.0, 1.0))
-        bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
-        total, best_variance, threshold = len(self.window), float('inf'), 0.5
-        for i in range(1, self.bins):
-            weight_bg, weight_fg = np.sum(hist[:i]) / total, np.sum(hist[i:]) / total
-            if weight_bg == 0 or weight_fg == 0: continue
-            mean_bg = np.sum(bin_centers[:i] * hist[:i]) / np.sum(hist[:i])
-            mean_fg = np.sum(bin_centers[i:] * hist[i:]) / np.sum(hist[i:])
-            var_bg = np.sum(((bin_centers[:i] - mean_bg) ** 2) * hist[:i]) / np.sum(hist[:i])
-            var_fg = np.sum(((bin_centers[i:] - mean_fg) ** 2) * hist[i:]) / np.sum(hist[i:])
-            within_class_variance = weight_bg * var_bg + weight_fg * var_fg
-            if within_class_variance < best_variance:
-                best_variance, threshold = within_class_variance, bin_edges[i]
-        return 1 if score >= threshold else 0
+        candidates = [0.0]
+        
+        for bnds in [bounds1, bounds2]:
+            if bnds[0] >= bnds[1]: continue
+            start_points = np.linspace(bnds[0], bnds[1], 5)
+            for x0 in start_points:
+                res = minimize(w, x0, bounds=[bnds], method='L-BFGS-B')
+                if res.success:
+                    candidates.append(res.x[0])
+        
+        best_ll = -np.inf
+        best_gamma, best_sigma = 0.1, np.std(Y) if np.std(Y) > 0 else 0.1
+        
+        for x in candidates:
+            if x == 0:
+                gamma, sigma = 0.0, Y_mean
+            else:
+                gamma = v(x) - 1
+                sigma = gamma / x if x != 0 else Y_mean
+            ll = self._log_likelihood(gamma, sigma, Y)
+            if ll > best_ll:
+                best_ll = ll
+                best_gamma = gamma
+                best_sigma = sigma
+                
+        return best_gamma, best_sigma
 
-class EmpiricalPOT:
-    def __init__(self, window_size=500, tail_fraction=0.1, margin_multiplier=1.5):
-        self.window = deque(maxlen=window_size)
-        self.tail_fraction, self.margin_multiplier = tail_fraction, margin_multiplier
+    def _calc_threshold(self):
+        if self.gamma == 0:
+            return self.t - self.sigma * np.log(self.q * self.k / self.N_t)
+        else:
+            return self.t + (self.sigma / self.gamma) * (((self.q * self.k / self.N_t)**(-self.gamma)) - 1)
 
-    def update_and_predict(self, score):
-        self.window.append(score)
-        if len(self.window) < 50: return 0
-        base_threshold = np.quantile(self.window, 1.0 - self.tail_fraction)
-        exceedances = [x - base_threshold for x in self.window if x > base_threshold]
-        if not exceedances: return 1 if score > base_threshold else 0
-        dynamic_threshold = base_threshold + (self.margin_multiplier * np.mean(exceedances))
-        return 1 if score > dynamic_threshold else 0
+    def calibrate(self, warmup_data):
+        for i in range(min(self.d, len(warmup_data))):
+            self.W.append(warmup_data[i])
+            
+        X_prime = []
+        for i in range(self.d, len(warmup_data)):
+            M_i = np.mean(self.W)
+            x_p = warmup_data[i] - M_i
+            X_prime.append(x_p)
+            self.W.append(warmup_data[i])
+            
+        X_prime = np.array(X_prime)
+        if len(X_prime) == 0:
+            X_prime = np.array(warmup_data)
+            
+        self.t = np.quantile(X_prime, 0.98) 
+        self.peaks = [xp - self.t for xp in X_prime if xp > self.t]
+        self.N_t = len(self.peaks)
+        self.k = len(X_prime)
+        
+        if self.N_t > 0:
+            self.gamma, self.sigma = self._grimshaw(self.peaks)
+            self.zq = self._calc_threshold()
+        else:
+            self.zq = self.t + 0.1
+            self.gamma, self.sigma = 0.1, 0.1
+            
+        self.M = np.mean(self.W)
+
+    def update_and_predict(self, score, warmup_instances=0):
+        if len(self.init_buffer) < warmup_instances:
+            self.init_buffer.append(score)
+            if len(self.init_buffer) == warmup_instances:
+                self.calibrate(self.init_buffer)
+            return 0, 0.0, 0.0
+        
+        X_i = score
+        X_prime_i = X_i - self.M
+        is_anomaly = 0
+        
+        if X_prime_i > self.zq:
+            is_anomaly = 1
+        elif X_prime_i > self.t:
+            self.peaks.append(X_prime_i - self.t)
+            self.N_t += 1
+            self.k += 1
+            self.gamma, self.sigma = self._grimshaw(self.peaks)
+            self.zq = self._calc_threshold()
+            self.W.append(X_i)
+            self.M = np.mean(self.W)
+        else:
+            self.k += 1
+            self.W.append(X_i)
+            self.M = np.mean(self.W)
+            
+        return is_anomaly, self.M + self.zq, self.M

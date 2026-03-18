@@ -1,7 +1,7 @@
 import optuna
 import numpy as np
 from capymoa.evaluation import ClassificationEvaluator
-from Anomaly.Models import get_anomaly_models
+from src.Anomaly.Models import get_anomaly_models
 from matplotlib import pyplot as plt
 from sklearn.metrics import f1_score, precision_score, recall_score
 optuna.logging.set_verbosity(optuna.logging.WARNING)
@@ -250,8 +250,8 @@ class AnomalyOptunaOptimizer:
     # -------------------------------------------------------------
     def _objective_hst(self, trial, trial_threshold):
         hst_params = {
-            'window_size': trial.suggest_int('window_size', 100, 2000, step=100),
-            'number_of_trees': trial.suggest_int('number_of_trees', 10, 100, step=10),
+            'window_size': trial.suggest_int('window_size', 100, 2050, step=50),
+            'number_of_trees': trial.suggest_int('number_of_trees', 10, 100, step=5),
             'max_depth': trial.suggest_int('max_depth', 5, 20),
             'anomaly_threshold': trial.suggest_float('anomaly_threshold', 0.1, 0.9, step=0.1),
             'size_limit': trial.suggest_float('size_limit', 0.05, 0.5, step=0.05)
