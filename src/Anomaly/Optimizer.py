@@ -4,6 +4,8 @@ from capymoa.evaluation import ClassificationEvaluator
 from src.Anomaly.Models import get_anomaly_models
 from matplotlib import pyplot as plt
 from sklearn.metrics import f1_score, precision_score, recall_score
+import math
+from collections import deque
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
 class AnomalyOptunaOptimizer:
@@ -21,7 +23,7 @@ class AnomalyOptunaOptimizer:
         scores = trial.user_attrs['scores']
         model_name = trial.user_attrs['model_name']
         attack_regions = trial.user_attrs['attack_regions'] 
-        trial_threshold = trial.user_attrs['trial_threshold'] # Recupera o threshold dinâmico ou fixo da rodada
+        trial_threshold = trial.user_attrs['trial_threshold']
         params = trial.params
         
         print(f"Trial {trial.number + 1}/{self.n_trials} | "
@@ -34,7 +36,77 @@ class AnomalyOptunaOptimizer:
         # Passa o trial_threshold para desenhar a linha vermelha no lugar certo
         self.plot_score(results_dict, attack_regions, title, threshold=trial_threshold)
 
-    def _evaluate_model(self, model, model_name, trial_threshold, window_size=0):
+    def _evaluate_ae(self, model, trial_threshold, warmup_instances=0):
+        self.stream.restart()
+        
+        scores_list = []
+        attack_regions = []
+        
+        y_true_list = []
+        y_pred_list = []
+        
+        in_attack = False
+        start_idx = 0
+        current_attack_idx = None
+        instance_idx = 0 
+        
+        # Garante um tempo de aprendizado inicial
+        min_warmup_required = max(warmup_instances, 0)
+
+        while self.stream.has_more_instances():
+            instance = self.stream.next_instance()
+            true_label_multiclass = instance.y_index 
+            
+            if true_label_multiclass != 0: 
+                if not in_attack:
+                    in_attack = True
+                    start_idx = instance_idx
+                    current_attack_idx = true_label_multiclass
+                elif true_label_multiclass != current_attack_idx:
+                    attack_regions.append((start_idx, instance_idx - 1, current_attack_idx))
+                    start_idx = instance_idx
+                    current_attack_idx = true_label_multiclass
+            else:
+                if in_attack:
+                    attack_regions.append((start_idx, instance_idx - 1, current_attack_idx))
+                    in_attack = False
+                    current_attack_idx = None
+            
+            binary_true_label = 1 if true_label_multiclass > 0 else 0
+            is_warmup_phase = instance_idx < min_warmup_required
+            
+            raw_score = model.score_instance(instance) 
+            scores_list.append(raw_score)
+            
+            predicted_class = 1 if raw_score > trial_threshold else 0
+            
+            y_true_list.append(binary_true_label)
+            y_pred_list.append(predicted_class)
+
+            try:
+                if is_warmup_phase or predicted_class == 0:
+                    model.train(instance)
+            except ValueError:
+                pass
+            
+            instance_idx += 1
+
+        if in_attack:
+            attack_regions.append((start_idx, instance_idx - 1, current_attack_idx))
+
+        eval_start = min_warmup_required
+        y_true_eval = y_true_list[eval_start:] if len(y_true_list) > eval_start else y_true_list
+        y_pred_eval = y_pred_list[eval_start:] if len(y_pred_list) > eval_start else y_pred_list
+
+        f1_val, prec_val, recall_val = self._get_metric_classifier(
+            y_true=y_true_eval, 
+            y_pred=y_pred_eval, 
+            target_class=self.target_class
+        )
+
+        return f1_val, prec_val, recall_val, scores_list, attack_regions
+    
+    def _evaluate_model(self, model, model_name, trial_threshold, warmup_instances=0):
         self.stream.restart()
         
         scores_list = []
@@ -77,7 +149,7 @@ class AnomalyOptunaOptimizer:
             y_true_list.append(binary_true_label)
             y_pred_list.append(predicted_class)
 
-            try:
+            try: 
                 model.train(instance)
             except ValueError:
                 pass
@@ -87,9 +159,9 @@ class AnomalyOptunaOptimizer:
         if in_attack:
             attack_regions.append((start_idx, instance_idx - 1, current_attack_idx))
 
-        # Ignora o período de warm-up (janela inicial)
-        y_true_eval = y_true_list[window_size:] if len(y_true_list) > window_size else y_true_list
-        y_pred_eval = y_pred_list[window_size:] if len(y_pred_list) > window_size else y_pred_list
+        # Ignora apenas o período de warm-up explícito
+        y_true_eval = y_true_list[warmup_instances:] if len(y_true_list) > warmup_instances else y_true_list
+        y_pred_eval = y_pred_list[warmup_instances:] if len(y_pred_list) > warmup_instances else y_pred_list
 
         # Cálculo das Métricas com Scikit-Learn
         f1_val, prec_val, recall_val = self._get_metric_classifier(
@@ -100,34 +172,60 @@ class AnomalyOptunaOptimizer:
 
         return f1_val, prec_val, recall_val, scores_list, attack_regions
 
-    def optimize(self, model_name):
+    def optimize(self, model_name, warmup_instances=0):
         tgt_str = f"Classe {self.target_class}" if self.target_class is not None else "Macro"
         print(f"\n[{model_name}] Iniciando otimização focada no F1-Score ({tgt_str}) com {self.n_trials} trials...")
         
         study = optuna.create_study(direction='maximize')
         
         def objective_wrapper(trial):
-            # Verifica se o usuário pediu threshold Dinâmico ou Fixo
-            if isinstance(self.discretization_threshold, str) and self.discretization_threshold.lower() in ["dinamico", "dinâmico"]:
-                trial_threshold = trial.suggest_float('dynamic_threshold', 0.05, 0.95, step=0.05)
+            # Transforma em minúsculo para facilitar a verificação
+            mode = str(self.discretization_threshold).lower()
+            
+            # Dinâmico - Thresholds totalmente independentes
+            if mode in ["dinamico", "dinâmico"]:
+                trial_threshold = trial.suggest_float('dynamic_threshold', 0.5, 0.95, step=0.05)
+                if model_name == 'AE':
+                    model_threshold = trial.suggest_float('threshold', 0.05, 0.9, step=0.05)
+                elif model_name == 'HST':
+                    model_threshold = trial.suggest_float('anomaly_threshold', 0.1, 0.9, step=0.05)
+
+            # Threshold unificado para discretização e parâmetro interno
+            elif mode == "params":
+                if model_name == 'AE':
+                    shared_threshold = trial.suggest_float('threshold', 0.1, 0.9, step=0.05)
+                    trial_threshold = shared_threshold
+                    model_threshold = shared_threshold
+                elif model_name == 'HST':
+                    shared_threshold = trial.suggest_float('anomaly_threshold', 0.1, 0.9, step=0.05)
+                    trial_threshold = shared_threshold
+                    model_threshold = shared_threshold
+                else:
+                    # Fallback para modelos que não possuem threshold interno
+                    trial_threshold = trial.suggest_float('dynamic_threshold', 0.05, 0.95, step=0.05)
+
+            # Fixo - Discretização travada no valor informado
             else:
                 trial_threshold = float(self.discretization_threshold)
+                if model_name == 'AE':
+                    model_threshold = trial.suggest_float('threshold', 0.1, 0.9, step=0.05)
+                elif model_name == 'HST':
+                    model_threshold = trial.suggest_float('anomaly_threshold', 0.1, 0.9, step=0.05)
 
-            # Chama os modelos passando o threshold atual
+            # Roteamento para os modelos
             if model_name == 'HST':
-                f1, prec, rec, scores, attack_regions = self._objective_hst(trial, trial_threshold)
+                f1, prec, rec, scores, attack_regions = self._objective_hst(trial, trial_threshold, model_threshold, warmup_instances)
             elif model_name == 'OIF':
-                f1, prec, rec, scores, attack_regions = self._objective_oif(trial, trial_threshold)
+                f1, prec, rec, scores, attack_regions = self._objective_oif(trial, trial_threshold, warmup_instances)
             elif model_name == 'AE':
-                f1, prec, rec, scores, attack_regions = self._objective_ae(trial, trial_threshold)
+                f1, prec, rec, scores, attack_regions = self._objective_ae(trial, trial_threshold, model_threshold, warmup_instances)
             elif model_name == 'RRCF':
-                f1, prec, rec, scores, attack_regions = self._objective_rrcf(trial, trial_threshold)
+                f1, prec, rec, scores, attack_regions = self._objective_rrcf(trial, trial_threshold, warmup_instances)
             elif model_name == 'AIF':
-                f1, prec, rec, scores, attack_regions = self._objective_aif(trial, trial_threshold)
+                f1, prec, rec, scores, attack_regions = self._objective_aif(trial, trial_threshold, warmup_instances)
             else:
                 raise ValueError("Modelo não suportado.")
             
-            # Salva atributos no trial
             trial.set_user_attr('metrics', (f1, prec, rec))
             trial.set_user_attr('scores', scores)
             trial.set_user_attr('model_name', model_name)
@@ -139,7 +237,6 @@ class AnomalyOptunaOptimizer:
         study.optimize(objective_wrapper, n_trials=self.n_trials, callbacks=[self._optuna_callback])
         
         print(f"\n[{model_name}] OTIMIZAÇÃO FINALIZADA")
-        
         best_trial = study.best_trial
         best_f1, best_prec, best_rec = best_trial.user_attrs['metrics']
         
@@ -191,7 +288,7 @@ class AnomalyOptunaOptimizer:
             color = colors[i % len(colors)]
             scores = np.array(data['scores'])
             instances = np.arange(len(scores))
-            window_size = 50
+            window_size = 5
             
             moving_avg = np.array([np.mean(scores[max(0, j-window_size):j+1]) for j in range(len(scores))])
             ax.plot(instances, moving_avg, color=color, alpha=0.85, linewidth=1.5, label=f'{name}', zorder=3)
@@ -233,34 +330,30 @@ class AnomalyOptunaOptimizer:
             return 0.0, 0.0, 0.0
 
         if target_class is None:
-            # Macro average (média entre as classes)
+            # Macro average
             f1 = f1_score(y_true, y_pred, average='macro', zero_division=0)
             prec = precision_score(y_true, y_pred, average='macro', zero_division=0)
             rec = recall_score(y_true, y_pred, average='macro', zero_division=0)
         else:
-            # Focado em uma classe específica (0 ou 1)
+            # Focado em uma classe específica
             f1 = f1_score(y_true, y_pred, pos_label=target_class, average='binary', zero_division=0)
             prec = precision_score(y_true, y_pred, pos_label=target_class, average='binary', zero_division=0)
             rec = recall_score(y_true, y_pred, pos_label=target_class, average='binary', zero_division=0)
             
         return f1 * 100.0, prec * 100.0, rec * 100.0
     
-    # -------------------------------------------------------------
-    # Funções de busca de hiperparâmetros para cada modelo
-    # -------------------------------------------------------------
-    def _objective_hst(self, trial, trial_threshold):
+    def _objective_hst(self, trial, trial_threshold, model_threshold, warmup_instances):
         hst_params = {
             'window_size': trial.suggest_int('window_size', 100, 2050, step=50),
-            'number_of_trees': trial.suggest_int('number_of_trees', 10, 100, step=5),
             'max_depth': trial.suggest_int('max_depth', 5, 20),
-            'anomaly_threshold': trial.suggest_float('anomaly_threshold', 0.1, 0.9, step=0.1),
+            'anomaly_threshold': model_threshold,
             'size_limit': trial.suggest_float('size_limit', 0.05, 0.5, step=0.05)
         }
         models = get_anomaly_models(self.schema, selected_models=['HST'], hst_params=hst_params)
-        # Passa o window_size para ignorar o inicio
-        return self._evaluate_model(models['HalfSpaceTrees'], 'HST', trial_threshold, window_size=hst_params['window_size']) 
+        
+        return self._evaluate_model(models['HalfSpaceTrees'], 'HST', trial_threshold, warmup_instances=warmup_instances)
 
-    def _objective_oif(self, trial, trial_threshold):
+    def _objective_oif(self, trial, trial_threshold, warmup_instances):
         oif_params = {
             'num_trees': trial.suggest_int('num_trees', 10, 100, step=10),
             'max_leaf_samples': trial.suggest_int('max_leaf_samples', 16, 128, step=16),
@@ -270,36 +363,33 @@ class AnomalyOptunaOptimizer:
             'branching_factor': trial.suggest_int('branching_factor', 2, 5)
         }
         models = get_anomaly_models(self.schema, selected_models=['OIF'], oif_params=oif_params)
-        # Passa o window_size
-        return self._evaluate_model(models['OnlineIsolationForest'], 'OIF', trial_threshold, window_size=oif_params['window_size']) 
+        return self._evaluate_model(models['OnlineIsolationForest'], 'OIF', trial_threshold, warmup_instances=warmup_instances) 
 
-    def _objective_ae(self, trial, trial_threshold):
+    def _objective_ae(self, trial, trial_threshold, model_threshold, warmup_instances):
+        num_features = self.schema.get_num_attributes()
+        max_hidden = max(1, num_features - 1)
+
         ae_params = {
-            'hidden_layer': trial.suggest_int('hidden_layer', 1, 5),
+            # 'hidden_layer': trial.suggest_int('hidden_layer', 1, max_hidden),
             'learning_rate': trial.suggest_float('learning_rate', 1e-4, 1e-2, log=True),
-            'threshold': trial.suggest_float('threshold', 0.1, 0.9, step=0.1)
+            # 'threshold': model_threshold 
         }
         models = get_anomaly_models(self.schema, selected_models=['AE'], ae_params=ae_params)
-        # AE não tem window_size nesse grid, passa default (0)
-        return self._evaluate_model(models['Autoencoder'], 'AE', trial_threshold, window_size=0) 
-
-    def _objective_rrcf(self, trial, trial_threshold):
+        
+        return self._evaluate_ae(models['Autoencoder'], trial_threshold, warmup_instances=warmup_instances)
+    
+    def _objective_rrcf(self, trial, trial_threshold, warmup_instances):
         rrcf_params = {
             'tree_size': trial.suggest_int('tree_size', 100, 2000, step=100),
             'n_trees': trial.suggest_int('n_trees', 10, 200, step=10)
         }
         models = get_anomaly_models(self.schema, selected_models=['RRCF'], rrcf_params=rrcf_params)
-        # RRCF usa 'tree_size' como bloco de construção base
-        return self._evaluate_model(models['RobustRandomCutForest'], 'RRCF', trial_threshold, window_size=rrcf_params['tree_size']) 
+        return self._evaluate_model(models['RobustRandomCutForest'], 'RRCF', trial_threshold, warmup_instances=warmup_instances) 
 
-    def _objective_aif(self, trial, trial_threshold):
+    def _objective_aif(self, trial, trial_threshold, warmup_instances):
         aif_params = {
             'window_size': trial.suggest_int('window_size', 128, 1024, step=128),
-            'n_trees': trial.suggest_int('n_trees', 10, 200, step=10),
             'height': trial.suggest_int('height', 5, 20),
-            'm_trees': trial.suggest_int('m_trees', 5, 50, step=5),
-            'weights': trial.suggest_float('weights', 0.1, 0.9, step=0.1)
         }
         models = get_anomaly_models(self.schema, selected_models=['AIF'], aif_params=aif_params)
-        # Passa o window_size
-        return self._evaluate_model(models['AdaptiveIsolationForest'], 'AIF', trial_threshold, window_size=aif_params['window_size'])
+        return self._evaluate_model(models['AdaptiveIsolationForest'], 'AIF', trial_threshold, warmup_instances=warmup_instances)
