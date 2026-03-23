@@ -6,8 +6,9 @@ from sklearn.feature_selection import VarianceThreshold
 from capymoa.stream import NumpyStream
 
 class DataStreamProcessor:
-    def __init__(self, logging=True):
+    def __init__(self, logging=True, selected_features=None):
         self.logging = logging
+        self.selected_features = selected_features
 
     def _log(self, message):
         if self.logging:
@@ -128,6 +129,19 @@ class DataStreamProcessor:
         df.columns = df.columns.str.strip()
         target_label_col = target_label_col.strip()
         
+        # Aplicação do filtro global de features antes de qualquer processamento
+        if self.selected_features is not None:
+            self._log(f"Filtro Global Ativo: Mantendo apenas as {len(self.selected_features)} features especificadas.")
+            
+            # Cria a lista do que manter, garantindo que as features existem no DF
+            cols_to_keep = [c for c in self.selected_features if c in df.columns]
+            
+            # Trava de segurança: Garante que a coluna target NÃO seja excluída
+            if target_label_col in df.columns and target_label_col not in cols_to_keep:
+                cols_to_keep.append(target_label_col)
+                
+            df = df[cols_to_keep]
+
         ignore_cols = ['Flow ID', 'Timestamp', 'SimillarHTTP', 'Unnamed: 0']
         if extra_ignore_cols:
             if isinstance(extra_ignore_cols, str):
@@ -153,13 +167,13 @@ class DataStreamProcessor:
         # Definição do target e encoding
         y, target_names = self._encode_labels(df[target_label_col], binary_label)
 
-        # redução da dimensionalidade
+        # redução da dimensionalidade (agora atua apenas sobre as features já filtradas)
         if threshold_var is not None or threshold_corr is not None or top_n_features is not None:
             self._log("Seleção de Features: Iniciando pipeline de redução de dimensionalidade...")
             X = self._remove_features(X, y, threshold_var=threshold_var,
                                       threshold_corr=threshold_corr, top_n_features=top_n_features)
         else:
-            self._log("Seleção de Features: Nenhuma técnica selecionada. Mantendo todas as colunas.")
+            self._log("Seleção de Features: Nenhuma técnica dinâmica selecionada. Mantendo colunas atuais.")
 
         # extrai dados finais para retorno 
         feature_names = X.columns.tolist()

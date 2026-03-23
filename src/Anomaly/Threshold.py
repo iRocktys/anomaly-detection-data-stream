@@ -3,9 +3,10 @@ from scipy.optimize import minimize
 from collections import deque
 
 class DSPOT:
-    def __init__(self, q=1e-3, depth=50):
+    def __init__(self, q=1e-3, depth=50, t_quantile=0.98): 
         self.q = q
         self.d = depth
+        self.t_quantile = t_quantile 
         self.W = deque(maxlen=depth)
         self.peaks = []
         self.t = None
@@ -53,7 +54,7 @@ class DSPOT:
         
         for bnds in [bounds1, bounds2]:
             if bnds[0] >= bnds[1]: continue
-            start_points = np.linspace(bnds[0], bnds[1], 5)
+            start_points = np.linspace(bnds[0], bnds[1], 3)
             for x0 in start_points:
                 res = minimize(w, x0, bounds=[bnds], method='L-BFGS-B')
                 if res.success:
@@ -97,7 +98,9 @@ class DSPOT:
         if len(X_prime) == 0:
             X_prime = np.array(warmup_data)
             
-        self.t = np.quantile(X_prime, 0.98) 
+        # 2. Utilizando o parâmetro t_quantile em vez do valor fixo 0.98
+        self.t = np.quantile(X_prime, self.t_quantile) 
+        
         self.peaks = [xp - self.t for xp in X_prime if xp > self.t]
         self.N_t = len(self.peaks)
         self.k = len(X_prime)

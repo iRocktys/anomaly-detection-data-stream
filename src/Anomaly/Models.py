@@ -37,9 +37,9 @@ def get_anomaly_models(
             'random_seed': 1,
             'window_size': 1900,
             'number_of_trees': 100,
-            'max_depth': 14,
-            'anomaly_threshold': 0.2,
-            'size_limit': 0.25
+            'max_depth': 6,
+            'anomaly_threshold': 0.48,
+            'size_limit': 0.05
         }
  
         if hst_params: default_hst.update(hst_params)
@@ -67,9 +67,9 @@ def get_anomaly_models(
     if 'AE' in selected_models:
         default_ae = {
             'schema': schema,
-            'hidden_layer': 10,
-            'learning_rate': 0.00012564,
-            'threshold': 0.6,
+            'hidden_layer': 12,
+            'learning_rate': 0.0024146,
+            'threshold': 0.85,
             'random_seed': 1
         }
         # threshold dinamico = 0.42-0.43
@@ -94,10 +94,10 @@ def get_anomaly_models(
             'schema': schema, 
             'window_size': 768,
             'n_trees': 100,
-            'height': 16,
+            'height': 12,
             'seed': None, # int or None
             'm_trees': 30,
-            'weights': 0.5
+            'weights': 0.7
         }
         
         if aif_params: default_aif.update(aif_params)

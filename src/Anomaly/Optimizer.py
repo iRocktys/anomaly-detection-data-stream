@@ -34,7 +34,7 @@ class AnomalyOptunaOptimizer:
         title = f"Scores - {model_name} | Trial {trial.number + 1}"
         
         # Passa o trial_threshold para desenhar a linha vermelha no lugar certo
-        self.plot_score(results_dict, attack_regions, title, threshold=trial_threshold)
+        # self.plot_score(results_dict, attack_regions, title, threshold=trial_threshold)
 
     def _evaluate_ae(self, model, trial_threshold, warmup_instances=0):
         self.stream.restart()
@@ -73,6 +73,8 @@ class AnomalyOptunaOptimizer:
                     current_attack_idx = None
             
             binary_true_label = 1 if true_label_multiclass > 0 else 0
+            
+            # Define se ainda estamos na fase de aquecimento
             is_warmup_phase = instance_idx < min_warmup_required
             
             raw_score = model.score_instance(instance) 
@@ -84,7 +86,7 @@ class AnomalyOptunaOptimizer:
             y_pred_list.append(predicted_class)
 
             try:
-                if is_warmup_phase or predicted_class == 0:
+                if is_warmup_phase:
                     model.train(instance)
             except ValueError:
                 pass
@@ -94,6 +96,7 @@ class AnomalyOptunaOptimizer:
         if in_attack:
             attack_regions.append((start_idx, instance_idx - 1, current_attack_idx))
 
+        # A avaliação das métricas ignora a fase de warmup, como já estava configurado
         eval_start = min_warmup_required
         y_true_eval = y_true_list[eval_start:] if len(y_true_list) > eval_start else y_true_list
         y_pred_eval = y_pred_list[eval_start:] if len(y_pred_list) > eval_start else y_pred_list
@@ -351,7 +354,15 @@ class AnomalyOptunaOptimizer:
         }
         models = get_anomaly_models(self.schema, selected_models=['HST'], hst_params=hst_params)
         
-        return self._evaluate_model(models['HalfSpaceTrees'], 'HST', trial_threshold, warmup_instances=warmup_instances)
+        # Sobrepõe o warmup fixo pelo tamanho da janela gerada neste trial
+        dynamic_warmup = hst_params['window_size']
+        
+        return self._evaluate_model(
+            models['HalfSpaceTrees'], 
+            'HST', 
+            trial_threshold, 
+            warmup_instances=dynamic_warmup
+        )
 
     def _objective_oif(self, trial, trial_threshold, warmup_instances):
         oif_params = {
@@ -370,9 +381,9 @@ class AnomalyOptunaOptimizer:
         max_hidden = max(1, num_features - 1)
 
         ae_params = {
-            # 'hidden_layer': trial.suggest_int('hidden_layer', 1, max_hidden),
+            'hidden_layer': trial.suggest_int('hidden_layer', 1, max_hidden),
             'learning_rate': trial.suggest_float('learning_rate', 1e-4, 1e-2, log=True),
-            # 'threshold': model_threshold 
+            'threshold': model_threshold
         }
         models = get_anomaly_models(self.schema, selected_models=['AE'], ae_params=ae_params)
         
