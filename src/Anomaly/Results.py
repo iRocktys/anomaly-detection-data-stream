@@ -1,6 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from sklearn.metrics import f1_score, precision_score, recall_score
+from sklearn.metrics import f1_score, precision_score, recall_score, matthews_corrcoef, confusion_matrix
 
 class Metrics:
     def get_metric_classifier(self, metrics_dict, metric_name, target_class=1):
@@ -22,35 +22,54 @@ class Metrics:
 
     def calc_sklearn_metrics(self, y_true, y_pred, target_class):
         if len(y_true) == 0:
-            return 0.0, 0.0, 0.0
+            return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
             
         if target_class is None:
             f1 = f1_score(y_true, y_pred, average='macro', zero_division=0)
             prec = precision_score(y_true, y_pred, average='macro', zero_division=0)
             rec = recall_score(y_true, y_pred, average='macro', zero_division=0)
+            mcc = matthews_corrcoef(y_true, y_pred)
+            cm = confusion_matrix(y_true, y_pred, labels=[0, 1])
+            if cm.shape == (2, 2):
+                tn, fp, fn, tp = cm.ravel()
+                fpr = fp / (fp + tn) if (fp + tn) > 0 else 0.0
+                tpr = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+            else:
+                fpr = 0.0
+                tpr = 0.0
         else:
             f1 = f1_score(y_true, y_pred, pos_label=target_class, average='binary', zero_division=0)
             prec = precision_score(y_true, y_pred, pos_label=target_class, average='binary', zero_division=0)
             rec = recall_score(y_true, y_pred, pos_label=target_class, average='binary', zero_division=0)
+            mcc = matthews_corrcoef(y_true, y_pred)
+            cm = confusion_matrix(y_true, y_pred, labels=[0, target_class])
+            if cm.shape == (2, 2):
+                tn, fp, fn, tp = cm.ravel()
+                fpr = fp / (fp + tn) if (fp + tn) > 0 else 0.0
+                tpr = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+            else:
+                fpr = 0.0
+                tpr = 0.0
             
-        return f1 * 100.0, prec * 100.0, rec * 100.0
+        return f1 * 100.0, prec * 100.0, rec * 100.0, mcc, fpr * 100.0, tpr * 100.0
 
     def display_cumulative_metrics(self, predictions_history, warmup_instances=0, target_class=1):
-        print(f"\n{'='*65}")
-        print(f"{'RELATÓRIO ACUMULATIVO':^65}")
-        print(f"{'='*65}")
-        print(f"{'Algoritmo':<25} | {'F1 (%)':<10} | {'Prec (%)':<10} | {'Rec (%)':<10}")
-        print(f"{'-'*65}")
+        print(f"\n{'='*105}")
+        print(f"{'RELATÓRIO ACUMULATIVO':^105}")
+        print(f"{'='*105}")
+        print(f"{'Algoritmo':<22} | {'F1 (%)':<8} | {'Prec (%)':<8} | {'Rec (%)':<8} | {'TPR (%)':<8} | {'FPR (%)':<8} | {'MCC':<8} | {'Tempo (s)':<10}")
+        print(f"{'-'*105}")
 
         for name, data in predictions_history.items():
             y_true_list = data['true_labels'][warmup_instances:] if len(data['true_labels']) > warmup_instances else data['true_labels']
             y_pred_list = data['predicted_classes'][warmup_instances:] if len(data['predicted_classes']) > warmup_instances else data['predicted_classes']
             
-            f1, prec, recall = self.calc_sklearn_metrics(y_true_list, y_pred_list, target_class)
+            f1, prec, recall, mcc, fpr, tpr = self.calc_sklearn_metrics(y_true_list, y_pred_list, target_class)
+            exec_time = data.get('exec_time', 0.0)
 
-            print(f"{name:<25} | {f1:<10.2f} | {prec:<10.2f} | {recall:<10.2f}")
+            print(f"{name:<22} | {f1:<8.2f} | {prec:<8.2f} | {recall:<8.2f} | {tpr:<8.2f} | {fpr:<8.3f} | {mcc:<8.3f} | {exec_time:<10.2f}")
         
-        print(f"{'='*65}\n")
+        print(f"{'='*105}\n")
 
 
 class Plots:
@@ -155,7 +174,6 @@ class Plots:
             
             instances = np.arange(len(scores))
             
-            # Aplicando média móvel para plotagem consistente com as janelas de métrica
             def moving_avg(arr, w):
                 return np.array([np.mean(arr[max(0, j-w):j+1]) for j in range(len(arr))])
                 
@@ -272,4 +290,3 @@ class Plots:
         plt.tight_layout()
         fig.subplots_adjust(top=0.94, bottom=0.12)
         plt.show()
-    

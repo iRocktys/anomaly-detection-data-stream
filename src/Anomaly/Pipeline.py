@@ -1,3 +1,4 @@
+import time
 from capymoa.evaluation import ClassificationEvaluator
 from src.Anomaly.Threshold import DSPOT
 from src.Anomaly.Results import Metrics, Plots
@@ -23,6 +24,7 @@ class AnomalyExperimentRunner:
         schema = stream.get_schema()
 
         for alg_idx, (alg_name, learner) in enumerate(algorithms.items()):
+            start_time = time.time()
             stream.restart()
             evaluator_class = ClassificationEvaluator(schema=schema, window_size=window_size)
             
@@ -79,7 +81,6 @@ class AnomalyExperimentRunner:
                 if count >= warmup_instances and count > 0 and count % window_size == 0:
                     class_metrics = evaluator_class.metrics_dict()
                     
-                    # Chamando método da classe Metrics
                     f1_val = self.metrics.get_metric_classifier(class_metrics, 'f1_score', target_class=target_class)
                     prec_val = self.metrics.get_metric_classifier(class_metrics, 'precision', target_class=target_class)
                     recall_val = self.metrics.get_metric_classifier(class_metrics, 'recall', target_class=target_class)
@@ -94,19 +95,22 @@ class AnomalyExperimentRunner:
             if alg_idx == 0 and in_attack:
                 attack_regions.append((start_attack, count, current_attack_label))
                 
+            exec_time = time.time() - start_time
             results_metrics[alg_name] = history
             
             predictions_history[alg_name] = {
                 'true_labels': alg_true_labels,
-                'predicted_classes': alg_predicted_classes
+                'predicted_classes': alg_predicted_classes,
+                'exec_time': exec_time
             }
 
-        # Chamando métodos das classes instanciadas
         self.metrics.display_cumulative_metrics(predictions_history, warmup_instances=warmup_instances, target_class=target_class)
         self.plots.plot_score(results_scores, attack_regions, title, threshold)
         self.plots.plot_metrics(results_metrics, attack_regions, title, window_size)
 
     def _run_anomaly_DSPOT(self, stream, algorithms, window_size, title, warmup_instances=0, target_class=None, dspot_q=1e-3, dspot_depth=50, dspot_t_quantile=0.98):
+        import time
+        
         results_metrics = {}
         results_scores = {}
         attack_regions = []
@@ -115,10 +119,10 @@ class AnomalyExperimentRunner:
         schema = stream.get_schema()
 
         for alg_idx, (alg_name, learner) in enumerate(algorithms.items()):
+            start_time = time.time()
             stream.restart()
             evaluator_class = ClassificationEvaluator(schema=schema, window_size=window_size)
             
-            # Instanciação do DSPOT atualizada com o novo parâmetro dspot_t_quantile
             dspot = DSPOT(q=dspot_q, depth=dspot_depth, t_quantile=dspot_t_quantile)
             
             history = {'instances': [], 'f1_score': [], 'precision': [], 'recall': []}
@@ -177,7 +181,6 @@ class AnomalyExperimentRunner:
                 if count >= warmup_instances and count > 0 and count % window_size == 0:
                     class_metrics = evaluator_class.metrics_dict()
                     
-                    # Chamando método da classe Metrics
                     f1_val = self.metrics.get_metric_classifier(class_metrics, 'f1_score', target_class=target_class)
                     prec_val = self.metrics.get_metric_classifier(class_metrics, 'precision', target_class=target_class)
                     recall_val = self.metrics.get_metric_classifier(class_metrics, 'recall', target_class=target_class)
@@ -192,14 +195,15 @@ class AnomalyExperimentRunner:
             if alg_idx == 0 and in_attack:
                 attack_regions.append((start_attack, count, current_attack_label))
                 
+            exec_time = time.time() - start_time
             results_metrics[alg_name] = history
             
             predictions_history[alg_name] = {
                 'true_labels': alg_true_labels,
-                'predicted_classes': alg_predicted_classes
+                'predicted_classes': alg_predicted_classes,
+                'exec_time': exec_time
             }
 
-        # Chamando métodos das classes instanciadas
         # self.metrics.display_cumulative_metrics(predictions_history, warmup_instances=warmup_instances, target_class=target_class)
         # self.plots.plot_dspot_score(results_scores, attack_regions, title)
         # self.plots.plot_metrics(results_metrics, attack_regions, title, window_size)
@@ -210,18 +214,23 @@ class AnomalyExperimentRunner:
         y_true_final = dados_finais['true_labels'][warmup_instances:] if len(dados_finais['true_labels']) > warmup_instances else dados_finais['true_labels']
         y_pred_final = dados_finais['predicted_classes'][warmup_instances:] if len(dados_finais['predicted_classes']) > warmup_instances else dados_finais['predicted_classes']
         
-        f1_final, prec_final, recall_final = self.metrics.calc_sklearn_metrics(y_true_final, y_pred_final, target_class)
+        f1_final, prec_final, recall_final, mcc_final, fpr_final, tpr_final = self.metrics.calc_sklearn_metrics(y_true_final, y_pred_final, target_class)
         
         return {
             'f1_score': f1_final,
             'precision': prec_final,
-            'recall': recall_final
+            'recall': recall_final,
+            'mcc': mcc_final,
+            'fpr': fpr_final,
+            'tpr': tpr_final,
+            'exec_time': dados_finais.get('exec_time', 0.0)
         }
 
     def _run_poisoning_evolution(self, scenarios_dict, threshold_type='dspot', fixed_threshold=0.5, warmup_instances=0, dspot_q=1e-3, dspot_depth=50):
         results_scores = {}
         
         for ds_name, setup in scenarios_dict.items():
+            start_time = time.time()
             stream = setup['stream']
             learner = setup['learner']
             stream.restart()
@@ -278,9 +287,13 @@ class AnomalyExperimentRunner:
             if in_attack:
                 results_scores[ds_name]['attack_regions'].append((start_attack, count, current_attack_label))
                 
+            results_scores[ds_name]['exec_time'] = time.time() - start_time
+                
         return results_scores
     
     def _run_anomaly_ae(self, stream, algorithms, window_size, title, warmup_instances=0, target_class=None, threshold=0.5):
+        import time
+        
         results_metrics = {}
         results_scores = {}
         attack_regions = []
@@ -288,10 +301,10 @@ class AnomalyExperimentRunner:
         predictions_history = {}
         schema = stream.get_schema()
         
-        # Garante que o warmup seja pelo menos 0
         min_warmup_required = max(warmup_instances, 0)
 
         for alg_idx, (alg_name, learner) in enumerate(algorithms.items()):
+            start_time = time.time()
             stream.restart()
             evaluator_class = ClassificationEvaluator(schema=schema, window_size=window_size)
             
@@ -342,16 +355,21 @@ class AnomalyExperimentRunner:
                 if count >= min_warmup_required:
                     evaluator_class.update(true_label_binary, predicted_class)
                
+                # try:
+                #     if is_warmup_phase or predicted_class == 0:
+                #         learner.train(instance)
+                # except ValueError:
+                #     pass
+
                 try:
                     if is_warmup_phase:
                         learner.train(instance)
                 except ValueError:
-                    pass
+                    pass    
 
                 if count >= min_warmup_required and count > 0 and count % window_size == 0:
                     class_metrics = evaluator_class.metrics_dict()
                     
-                    # Chamando método da classe Metrics
                     f1_val = self.metrics.get_metric_classifier(class_metrics, 'f1_score', target_class=target_class)
                     prec_val = self.metrics.get_metric_classifier(class_metrics, 'precision', target_class=target_class)
                     recall_val = self.metrics.get_metric_classifier(class_metrics, 'recall', target_class=target_class)
@@ -366,14 +384,33 @@ class AnomalyExperimentRunner:
             if alg_idx == 0 and in_attack:
                 attack_regions.append((start_attack, count - 1, current_attack_label))
                 
+            exec_time = time.time() - start_time
             results_metrics[alg_name] = history
             
             predictions_history[alg_name] = {
                 'true_labels': alg_true_labels,
-                'predicted_classes': alg_predicted_classes
+                'predicted_classes': alg_predicted_classes,
+                'exec_time': exec_time
             }
 
-        # Chamando métodos das classes instanciadas
         self.metrics.display_cumulative_metrics(predictions_history, warmup_instances=min_warmup_required, target_class=target_class)
         self.plots.plot_score(results_scores, attack_regions, title, threshold)
         self.plots.plot_metrics(results_metrics, attack_regions, title, window_size)
+
+        primeiro_algoritmo = list(algorithms.keys())[0]
+        dados_finais = predictions_history[primeiro_algoritmo]
+        
+        y_true_final = dados_finais['true_labels'][min_warmup_required:] if len(dados_finais['true_labels']) > min_warmup_required else dados_finais['true_labels']
+        y_pred_final = dados_finais['predicted_classes'][min_warmup_required:] if len(dados_finais['predicted_classes']) > min_warmup_required else dados_finais['predicted_classes']
+        
+        f1_final, prec_final, recall_final, mcc_final, fpr_final, tpr_final = self.metrics.calc_sklearn_metrics(y_true_final, y_pred_final, target_class)
+        
+        return {
+            'f1_score': f1_final,
+            'precision': prec_final,
+            'recall': recall_final,
+            'mcc': mcc_final,
+            'fpr': fpr_final,
+            'tpr': tpr_final,
+            'exec_time': dados_finais.get('exec_time', 0.0)
+        }
