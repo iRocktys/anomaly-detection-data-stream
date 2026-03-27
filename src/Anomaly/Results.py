@@ -3,28 +3,32 @@ import matplotlib.pyplot as plt
 from sklearn.metrics import f1_score, precision_score, recall_score, matthews_corrcoef, confusion_matrix
 
 class Metrics:
-    def get_metric_classifier(self, metrics_dict, metric_name, target_class=1):
+    def get_metric_classifier(self, metrics_dict, metric_name, target_class=None):
         norm_metrics = {str(k).lower(): v for k, v in metrics_dict.items()}
         metric_name = str(metric_name).lower()
         
         if target_class is None:
+            tc = 0
+        elif str(target_class).lower() == 'macro':
+            tc = 'macro'
+        else:
+            tc = int(target_class)
+
+        if tc == 'macro':
             val_0 = norm_metrics.get(f'{metric_name}_0', 0.0)
             val_1 = norm_metrics.get(f'{metric_name}_1', 0.0)
-            
             val_0 = 0.0 if val_0 is None or np.isnan(val_0) else float(val_0)
             val_1 = 0.0 if val_1 is None or np.isnan(val_1) else float(val_1)
-            
-            return (val_0 + val_1) / 2.0
-            
+            return ((val_0 + val_1) / 2.0) * 100.0
         else:
-            val = norm_metrics.get(f'{metric_name}_{target_class}')
-            return float(val) if val is not None and not np.isnan(val) else 0.0
+            val = norm_metrics.get(f'{metric_name}_{tc}')
+            return (float(val) * 100.0) if val is not None and not np.isnan(val) else 0.0
 
-    def calc_sklearn_metrics(self, y_true, y_pred, target_class):
+    def calc_sklearn_metrics(self, y_true, y_pred, target_class=None):
         if len(y_true) == 0:
             return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
             
-        if target_class is None:
+        if target_class is None or str(target_class).lower() == 'macro':
             f1 = f1_score(y_true, y_pred, average='macro', zero_division=0)
             prec = precision_score(y_true, y_pred, average='macro', zero_division=0)
             rec = recall_score(y_true, y_pred, average='macro', zero_division=0)
@@ -38,38 +42,163 @@ class Metrics:
                 fpr = 0.0
                 tpr = 0.0
         else:
-            f1 = f1_score(y_true, y_pred, pos_label=target_class, average='binary', zero_division=0)
-            prec = precision_score(y_true, y_pred, pos_label=target_class, average='binary', zero_division=0)
-            rec = recall_score(y_true, y_pred, pos_label=target_class, average='binary', zero_division=0)
+            tc = int(target_class)
+            f1 = f1_score(y_true, y_pred, pos_label=tc, average='binary', zero_division=0)
+            prec = precision_score(y_true, y_pred, pos_label=tc, average='binary', zero_division=0)
+            rec = recall_score(y_true, y_pred, pos_label=tc, average='binary', zero_division=0)
             mcc = matthews_corrcoef(y_true, y_pred)
-            cm = confusion_matrix(y_true, y_pred, labels=[0, target_class])
+            cm = confusion_matrix(y_true, y_pred, labels=[0, 1])
             if cm.shape == (2, 2):
                 tn, fp, fn, tp = cm.ravel()
-                fpr = fp / (fp + tn) if (fp + tn) > 0 else 0.0
-                tpr = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+                if tc == 0:
+                    fpr = fn / (fn + tp) if (fn + tp) > 0 else 0.0
+                    tpr = tn / (tn + fp) if (tn + fp) > 0 else 0.0
+                else:
+                    fpr = fp / (fp + tn) if (fp + tn) > 0 else 0.0
+                    tpr = tp / (tp + fn) if (tp + fn) > 0 else 0.0
             else:
                 fpr = 0.0
                 tpr = 0.0
             
         return f1 * 100.0, prec * 100.0, rec * 100.0, mcc, fpr * 100.0, tpr * 100.0
 
-    def display_cumulative_metrics(self, predictions_history, warmup_instances=0, target_class=1):
-        print(f"\n{'='*105}")
-        print(f"{'RELATÓRIO ACUMULATIVO':^105}")
-        print(f"{'='*105}")
-        print(f"{'Algoritmo':<22} | {'F1 (%)':<8} | {'Prec (%)':<8} | {'Rec (%)':<8} | {'TPR (%)':<8} | {'FPR (%)':<8} | {'MCC':<8} | {'Tempo (s)':<10}")
-        print(f"{'-'*105}")
+    def display_cumulative_metrics(self, predictions_history, warmup_instances=0, target_class=None, attack_regions=None):
+        if attack_regions is None:
+            attack_regions = []
+            
+        num_attacks = len(attack_regions)
+        header_base = f"{'Algoritmo':<22} | {'F1 (%)':<8} | {'Prec (%)':<8} | {'Rec (%)':<8} | {'MCC':<8} | {'Tempo (s)':<10}"
+        header_dyn = ""
+        for i in range(num_attacks):
+            header_dyn += f" | {'Drp'+str(i+1)+' %':<8} | {'Drp'+str(i+1)+' n':<8} | {'Rec'+str(i+1)+' %':<8}"
+            
+        full_header = header_base + header_dyn
+        line_len = len(full_header)
+        
+        if target_class is None:
+            tgt_str = "HIBRIDA (Macro Global, Queda Cls 0 - Janela 2000)"
+        elif str(target_class).lower() == 'macro':
+            tgt_str = "MACRO TOTAL (Janela 2000)"
+        else:
+            tgt_str = f"CLASSE {target_class} (Janela 2000)"
+
+        print(f"\n{'='*line_len}")
+        print(f"{f'RELATÓRIO COMPORTAMENTAL - {tgt_str}':^{line_len}}")
+        print(f"{'='*line_len}")
+        print(full_header)
+        print(f"{'-'*line_len}")
+
+        if target_class is None:
+            timeline_class = 0
+        elif str(target_class).lower() == 'macro':
+            timeline_class = 'macro'
+        else:
+            timeline_class = int(target_class)
+
+        window_size = 2000
 
         for name, data in predictions_history.items():
-            y_true_list = data['true_labels'][warmup_instances:] if len(data['true_labels']) > warmup_instances else data['true_labels']
-            y_pred_list = data['predicted_classes'][warmup_instances:] if len(data['predicted_classes']) > warmup_instances else data['predicted_classes']
+            y_true_full = np.array(data['true_labels'])
+            y_pred_full = np.array(data['predicted_classes'])
+            
+            y_true_list = y_true_full[warmup_instances:] if len(y_true_full) > warmup_instances else y_true_full
+            y_pred_list = y_pred_full[warmup_instances:] if len(y_pred_full) > warmup_instances else y_pred_full
             
             f1, prec, recall, mcc, fpr, tpr = self.calc_sklearn_metrics(y_true_list, y_pred_list, target_class)
             exec_time = data.get('exec_time', 0.0)
 
-            print(f"{name:<22} | {f1:<8.2f} | {prec:<8.2f} | {recall:<8.2f} | {tpr:<8.2f} | {fpr:<8.3f} | {mcc:<8.3f} | {exec_time:<10.2f}")
+            if timeline_class == 'macro':
+                is_tp0 = ((y_true_full == 0) & (y_pred_full == 0)).astype(float)
+                is_fp0 = ((y_true_full != 0) & (y_pred_full == 0)).astype(float)
+                is_fn0 = ((y_true_full == 0) & (y_pred_full != 0)).astype(float)
+                
+                tp0 = np.convolve(is_tp0, np.ones(window_size), mode='full')[:len(y_true_full)]
+                fp0 = np.convolve(is_fp0, np.ones(window_size), mode='full')[:len(y_true_full)]
+                fn0 = np.convolve(is_fn0, np.ones(window_size), mode='full')[:len(y_true_full)]
+                
+                den0 = 2 * tp0 + fp0 + fn0
+                f1_0_timeline = np.zeros_like(tp0, dtype=float)
+                mask0 = den0 > 0
+                f1_0_timeline[mask0] = (2 * tp0[mask0] / den0[mask0])
+                f1_0_timeline[den0 == 0] = 1.0
+
+                is_tp1 = ((y_true_full == 1) & (y_pred_full == 1)).astype(float)
+                is_fp1 = ((y_true_full != 1) & (y_pred_full == 1)).astype(float)
+                is_fn1 = ((y_true_full == 1) & (y_pred_full != 1)).astype(float)
+                
+                tp1 = np.convolve(is_tp1, np.ones(window_size), mode='full')[:len(y_true_full)]
+                fp1 = np.convolve(is_fp1, np.ones(window_size), mode='full')[:len(y_true_full)]
+                fn1 = np.convolve(is_fn1, np.ones(window_size), mode='full')[:len(y_true_full)]
+                
+                den1 = 2 * tp1 + fp1 + fn1
+                f1_1_timeline = np.zeros_like(tp1, dtype=float)
+                mask1 = den1 > 0
+                f1_1_timeline[mask1] = (2 * tp1[mask1] / den1[mask1])
+                f1_1_timeline[den1 == 0] = 1.0
+
+                f1_timeline = ((f1_0_timeline + f1_1_timeline) / 2.0) * 100.0
+            else:
+                tc = timeline_class
+                is_tp = ((y_true_full == tc) & (y_pred_full == tc)).astype(float)
+                is_fp = ((y_true_full != tc) & (y_pred_full == tc)).astype(float)
+                is_fn = ((y_true_full == tc) & (y_pred_full != tc)).astype(float)
+                
+                tp = np.convolve(is_tp, np.ones(window_size), mode='full')[:len(y_true_full)]
+                fp = np.convolve(is_fp, np.ones(window_size), mode='full')[:len(y_true_full)]
+                fn = np.convolve(is_fn, np.ones(window_size), mode='full')[:len(y_true_full)]
+                
+                denominator = 2 * tp + fp + fn
+                f1_timeline = np.zeros_like(tp, dtype=float)
+                valid_mask = denominator > 0
+                f1_timeline[valid_mask] = (2 * tp[valid_mask] / denominator[valid_mask]) * 100.0
+                f1_timeline[denominator == 0] = 100.0
+
+            drops_perc = []
+            drops_inst = []
+            recs_perc = []
+            
+            for i, (start, end, label) in enumerate(attack_regions):
+                start_idx = max(start, warmup_instances)
+                end_idx = max(end, warmup_instances)
+                
+                if start_idx >= len(f1_timeline):
+                    break
+                
+                f1_before = f1_timeline[start_idx - 1] if start_idx > 0 else 0.0
+                
+                if end_idx >= start_idx:
+                    window_attack = f1_timeline[start_idx:end_idx + 1]
+                    min_relative_idx = np.argmin(window_attack)
+                    f1_lowest = window_attack[min_relative_idx]
+                    
+                    drop_p = f1_lowest - f1_before
+                    drop_n = min_relative_idx  
+                else:
+                    drop_p, drop_n, f1_lowest = 0.0, 0, f1_before
+                    
+                drops_perc.append(drop_p)
+                drops_inst.append(drop_n)
+                
+                target_idx = end_idx + 2000
+                if target_idx >= len(f1_timeline):
+                    target_idx = len(f1_timeline) - 1
+                
+                if target_idx > end_idx:
+                    f1_at_target = f1_timeline[target_idx]
+                    rec_p = f1_at_target - f1_lowest
+                else:
+                    rec_p = 0.0
+                    
+                recs_perc.append(rec_p)
+
+            row_base = f"{name:<22} | {f1:<8.2f} | {prec:<8.2f} | {recall:<8.2f} | {mcc:<8.3f} | {exec_time:<10.2f}"
+            row_dyn = ""
+            for dp, dn, rp in zip(drops_perc, drops_inst, recs_perc):
+                row_dyn += f" | {dp:<8.2f} | {dn:<8} | {rp:<+8.2f}"
+                
+            print(row_base + row_dyn)
         
-        print(f"{'='*105}\n")
+        print(f"{'='*line_len}\n")
 
 
 class Plots:
@@ -156,7 +285,7 @@ class Plots:
             patch.set_edgecolor('gray')
             patch.set_linewidth(1.0)
             patch.set_alpha(0.8)
-            
+        
         fig.subplots_adjust(bottom=0.3)
         plt.tight_layout()
         plt.show()

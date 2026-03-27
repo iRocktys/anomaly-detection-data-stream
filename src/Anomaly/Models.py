@@ -37,7 +37,7 @@ def get_anomaly_models(
             'random_seed': 1,
             'window_size': 1900,
             'number_of_trees': 100,
-            'max_depth': 6,
+            'max_depth': 7,
             'anomaly_threshold': 0.48,
             'size_limit': 0.05
         }
@@ -92,12 +92,12 @@ def get_anomaly_models(
     if 'AIF' in selected_models:
         default_aif = {
             'schema': schema, 
-            'window_size': 768,
+            'window_size': 256,
             'n_trees': 100,
-            'height': 12,
+            'height': None,
             'seed': None, # int or None
-            'm_trees': 30,
-            'weights': 0.7
+            'm_trees': 10,
+            'weights': 0.5
         }
         
         if aif_params: default_aif.update(aif_params)
