@@ -128,9 +128,11 @@ class AnomalyExperimentRunner:
                 block_label = 1
             attack_regions.append((start_idx, last_idx, block_label))
 
-        self.metrics.display_cumulative_metrics(predictions_history, warmup_instances=min_warmup_required, target_class=target_class, attack_regions=attack_regions)
+        self.metrics.display_cumulative_metrics(predictions_history, warmup_instances=min_warmup_required, target_class=target_class)
         self.plots.plot_score(results_scores, attack_regions, title, threshold)
-        self.plots.plot_metrics(results_metrics, attack_regions, title, window_size)
+        
+        # ATUALIZAÇÃO: Passando o target_class
+        self.plots.plot_metrics(results_metrics, attack_regions, title, window_size, target_class)
 
         dados_finais = predictions_history[primeiro_algoritmo]
         y_true_final = dados_finais['true_labels'][min_warmup_required:] if len(dados_finais['true_labels']) > min_warmup_required else dados_finais['true_labels']
@@ -249,7 +251,9 @@ class AnomalyExperimentRunner:
 
         self.metrics.display_cumulative_metrics(predictions_history, warmup_instances=warmup_instances, target_class=target_class)
         self.plots.plot_dspot_score(results_scores, attack_regions, title)
-        self.plots.plot_metrics(results_metrics, attack_regions, title, window_size)
+        
+        # ATUALIZAÇÃO: Passando o target_class
+        self.plots.plot_metrics(results_metrics, attack_regions, title, window_size, target_class)
 
         primeiro_algoritmo = list(algorithms.keys())[0]
         dados_finais = predictions_history[primeiro_algoritmo]

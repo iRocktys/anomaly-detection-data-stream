@@ -30,7 +30,6 @@ class AnomalyOptunaOptimizer:
               f"F1: {f1:.2f} | Prec: {prec:.2f} | Rec: {rec:.2f} | "
               f"Params: {params}")
 
-    # O AutoEncoder MANTÉM a trava (ele só pode ver tráfego normal)
     def _evaluate_ae(self, model, trial_threshold, warmup_instances=0):
         self.stream.restart()
         
@@ -65,7 +64,6 @@ class AnomalyOptunaOptimizer:
         f1_val, prec_val, recall_val = self._get_metric_classifier(y_true_eval, y_pred_eval, self.target_class)
         return f1_val, prec_val, recall_val
     
-    # HST, OIF, RRCF voltam a usar esta função (Sem a trava. Treinam com tudo!)
     def _evaluate_model(self, model, trial_threshold, warmup_instances=0):
         self.stream.restart()
         
@@ -85,7 +83,6 @@ class AnomalyOptunaOptimizer:
             y_pred_list.append(predicted_class)
 
             try: 
-                # Lógica corrigida: Algoritmos de árvore treinam com todas as instâncias
                 model.train(instance)
             except ValueError:
                 pass
@@ -152,7 +149,6 @@ class AnomalyOptunaOptimizer:
             y_pred_list.append(predicted_class)
 
             try: 
-                # Lógica corrigida: Só o AE tem trava. Os outros treinam com tudo.
                 if is_ae:
                     if instance_idx < min_warmup_required or predicted_class == 0:
                         model.train(instance)
@@ -165,28 +161,6 @@ class AnomalyOptunaOptimizer:
             
         exec_time = time.time() - start_time
         
-        y_true_array = np.array(y_true_list)
-        y_true_multi = np.array(y_true_multi_list)
-        attack_indices = np.where(y_true_array == 1)[0]
-        
-        attack_regions = []
-        if len(attack_indices) > 0:
-            start_idx = attack_indices[0]
-            last_idx = attack_indices[0]
-            for idx in attack_indices[1:]:
-                if idx - last_idx > 2000:
-                    block_labels = y_true_multi[start_idx:last_idx+1]
-                    block_attack_labels = block_labels[block_labels != 0]
-                    block_label = np.bincount(block_attack_labels).argmax() if len(block_attack_labels) > 0 else 1
-                    attack_regions.append((start_idx, last_idx, block_label))
-                    start_idx = idx
-                last_idx = idx
-            
-            block_labels = y_true_multi[start_idx:last_idx+1]
-            block_attack_labels = block_labels[block_labels != 0]
-            block_label = np.bincount(block_attack_labels).argmax() if len(block_attack_labels) > 0 else 1
-            attack_regions.append((start_idx, last_idx, block_label))
-
         predictions_history = {
             f"Melhor {model_name}": {
                 'true_labels': y_true_list,
@@ -199,13 +173,12 @@ class AnomalyOptunaOptimizer:
         self.metrics.display_cumulative_metrics(
             predictions_history=predictions_history, 
             warmup_instances=min_warmup_required, 
-            target_class=self.target_class, 
-            attack_regions=attack_regions
+            target_class=self.target_class
         )
 
     def optimize(self, model_name, warmup_instances=0):
         if self.target_class is None:
-            tgt_str = "Híbrido (Macro Global, Quedas Cls 0)"
+            tgt_str = "Híbrido (Macro Global)"
         elif str(self.target_class).lower() == 'macro':
             tgt_str = "Macro Total"
         else:
