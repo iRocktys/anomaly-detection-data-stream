@@ -16,7 +16,7 @@ class AnomalyExperimentRunner:
         self.metrics = Metrics()
         self.plots = Plots(target_names)
 
-    def _run_anomaly_evaluation(self, stream, algorithms, window_size, title, warmup_instances=0, target_class=None, threshold=0.5, ae_keywords=None, dataset_name="Cenario", recovery_window=1000):
+    def _run_anomaly_evaluation(self, stream, algorithms, window_size, title, warmup_instances=0, target_class=None, target_class_pass=None, threshold=0.5, ae_keywords=None, dataset_name="Cenario", recovery_window=1000):
        
         if ae_keywords is None:
             ae_keywords = ['AE', 'AUTOENCODER']
@@ -132,6 +132,7 @@ class AnomalyExperimentRunner:
             predictions_history, 
             warmup_instances=min_warmup_required, 
             target_class=target_class,
+            target_class_pass=target_class_pass,
             attack_regions=attack_regions,
             recovery_window=recovery_window,
             normal_class_idx=self.normal_class_idx
@@ -156,7 +157,7 @@ class AnomalyExperimentRunner:
             'exec_time': dados_finais.get('exec_time', 0.0)
         }
 
-    def _run_anomaly_DSPOT(self, stream, algorithms, window_size, title, warmup_instances=0, target_class=None, dspot_q=1e-3, dspot_depth=50, dspot_t_quantile=0.98, recovery_window=1000):
+    def _run_anomaly_DSPOT(self, stream, algorithms, window_size, title, warmup_instances=0, target_class=None, target_class_pass=None, dspot_q=1e-3, dspot_depth=50, dspot_t_quantile=0.98, recovery_window=1000):
         results_metrics = {}
         results_scores = {}
         attack_regions = []
@@ -259,6 +260,7 @@ class AnomalyExperimentRunner:
             predictions_history, 
             warmup_instances=warmup_instances, 
             target_class=target_class,
+            target_class_pass=target_class_pass,
             attack_regions=attack_regions,
             recovery_window=recovery_window,
             normal_class_idx=self.normal_class_idx

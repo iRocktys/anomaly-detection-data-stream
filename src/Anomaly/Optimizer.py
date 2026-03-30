@@ -13,12 +13,13 @@ from collections import deque
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
 class AnomalyOptunaOptimizer:
-    def __init__(self, stream, n_trials=30, discretization_threshold=0.5, target_class=None, target_names=None):
+    def __init__(self, stream, n_trials=30, discretization_threshold=0.5, target_class=None, target_class_pass=None, target_names=None):
         self.stream = stream
         self.schema = stream.get_schema()
         self.n_trials = n_trials
         self.discretization_threshold = discretization_threshold
         self.target_class = target_class
+        self.target_class_pass = target_class_pass
         self.best_params = {}
         self.target_names = target_names if target_names is not None else ['Normal', 'Ataque']
         self.metrics = Metrics()
@@ -174,6 +175,7 @@ class AnomalyOptunaOptimizer:
             predictions_history=predictions_history, 
             warmup_instances=min_warmup_required, 
             target_class=self.target_class,
+            target_class_pass=self.target_class_pass,
             recovery_window=recovery_window
         )
 

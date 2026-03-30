@@ -86,8 +86,8 @@ class Metrics:
             
         return attack_regions
 
-    def calc_behavioral_metrics(self, y_true, y_pred, attack_regions, recovery_window=1000, warmup_instances=0, target_class=None):
-        """Calcula Passagem e Recuperação para cada onda de ataque individualmente"""
+    def calc_behavioral_metrics(self, y_true, y_pred, attack_regions, recovery_window=1000, warmup_instances=0, target_class_pass=None):
+        """Calcula Passagem e Recuperação para cada onda de ataque individualmente usando target_class_pass"""
         behavioral_data = []
         for i, (start, end, label) in enumerate(attack_regions):
             if end < warmup_instances:
@@ -96,21 +96,21 @@ class Metrics:
                 
             start_eff = max(start, warmup_instances)
             
-            # F1 Inicio (antes da onda de ataque)
+            # F1 Inicio (antes da onda de ataque) - Usa target_class_pass
             y_t_start = y_true[warmup_instances:start_eff]
             y_p_start = y_pred[warmup_instances:start_eff]
-            f1_start = self.calc_sklearn_metrics(y_t_start, y_p_start, target_class)[0] if len(y_t_start) > 0 else 0.0
+            f1_start = self.calc_sklearn_metrics(y_t_start, y_p_start, target_class_pass)[0] if len(y_t_start) > 0 else 0.0
             
-            # F1 Final (ao final da onda de ataque)
+            # F1 Final (ao final da onda de ataque) - Usa target_class_pass
             y_t_end = y_true[warmup_instances:end+1]
             y_p_end = y_pred[warmup_instances:end+1]
-            f1_end = self.calc_sklearn_metrics(y_t_end, y_p_end, target_class)[0] if len(y_t_end) > 0 else 0.0
+            f1_end = self.calc_sklearn_metrics(y_t_end, y_p_end, target_class_pass)[0] if len(y_t_end) > 0 else 0.0
             
-            # F1 Recuperação (após X amostras do fim da onda)
+            # F1 Recuperação (após X amostras do fim da onda) - Usa target_class_pass
             rec_idx = min(end + 1 + recovery_window, len(y_true))
             y_t_rec = y_true[warmup_instances:rec_idx]
             y_p_rec = y_pred[warmup_instances:rec_idx]
-            f1_rec = self.calc_sklearn_metrics(y_t_rec, y_p_rec, target_class)[0] if len(y_t_rec) > 0 else 0.0
+            f1_rec = self.calc_sklearn_metrics(y_t_rec, y_p_rec, target_class_pass)[0] if len(y_t_rec) > 0 else 0.0
             
             passagem = f1_end - f1_start
             recuperacao = f1_rec - f1_end
@@ -123,7 +123,7 @@ class Metrics:
             
         return behavioral_data
 
-    def display_cumulative_metrics(self, predictions_history, warmup_instances=0, target_class=None, attack_regions=None, recovery_window=1000, normal_class_idx=0):
+    def display_cumulative_metrics(self, predictions_history, warmup_instances=0, target_class=None, target_class_pass=None, attack_regions=None, recovery_window=1000, normal_class_idx=0):
         if attack_regions is None or len(attack_regions) == 0:
             first_name = list(predictions_history.keys())[0]
             y_true_multi = predictions_history[first_name].get('true_labels_multi')
@@ -132,18 +132,30 @@ class Metrics:
             else:
                 attack_regions = []
 
+        tc_pass = target_class_pass if target_class_pass is not None else target_class
+
         header_base = f"{'Algoritmo':<22} | {'F1 (%)':<8} | {'Prec (%)':<8} | {'Rec (%)':<8} | {'MCC':<8} | {'Tempo (s)':<10}"
         line_len = len(header_base)
         
+        # Strings para o cabeçalho
         if target_class is None:
-            tgt_str = "HIBRIDA (Macro Global)"
+            gen_str = "HÍBRIDA (Macro Global)"
         elif str(target_class).lower() == 'macro':
-            tgt_str = "MACRO TOTAL"
+            gen_str = "MACRO"
         else:
-            tgt_str = f"CLASSE {target_class}"
+            gen_str = f"CLASSE {target_class}"
+
+        if tc_pass is None or str(tc_pass).lower() == 'macro':
+            beh_str = "MACRO"
+        else:
+            beh_str = f"CLASSE {tc_pass}"
+
+        # Monta um título
+        titulo_relatorio = f"RELATÓRIO COMPORTAMENTAL | Métricas: {gen_str} | Passagens: {beh_str}"
+        line_len = max(len(header_base), len(titulo_relatorio) + 4)
 
         print(f"\n{'='*line_len}")
-        print(f"{f'RELATÓRIO COMPORTAMENTAL - {tgt_str}':^{line_len}}")
+        print(f"{titulo_relatorio:^{line_len}}")
         print(f"{'='*line_len}")
         print(header_base)
         print(f"{'-'*line_len}")
@@ -162,16 +174,15 @@ class Metrics:
             print(row_base)
             
             # Printa as métricas de cada onda de ataque
+            behavioral_data = self.calc_behavioral_metrics(y_true_full, y_pred_full, attack_regions, recovery_window, warmup_instances, tc_pass)
             print(f"{'-'*line_len}")
-            behavioral_data = self.calc_behavioral_metrics(y_true_full, y_pred_full, attack_regions, recovery_window, warmup_instances, target_class)
             for b in behavioral_data:
                 idx = b['ataque_idx']
                 p = b['passagem']
                 r = b['recuperacao']
                 p_str = f"+{p:.2f}%" if p > 0 else f"{p:.2f}%"
                 r_str = f"+{r:.2f}%" if r > 0 else f"{r:.2f}%"
-                
-                print(f"  -> Ataque {idx}: Passagem: {p_str:<8} | Recuperação ({recovery_window} amostras): {r_str}")
+                print(f"  -> Ataque {idx} ({beh_str}): Passagem: {p_str:<8} | Recuperação ({recovery_window} amostras): {r_str}")
         
         print(f"{'='*line_len}\n")
 
