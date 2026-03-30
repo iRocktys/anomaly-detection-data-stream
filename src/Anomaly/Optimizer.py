@@ -95,7 +95,7 @@ class AnomalyOptunaOptimizer:
         f1_val, prec_val, recall_val = self._get_metric_classifier(y_true_eval, y_pred_eval, self.target_class)
         return f1_val, prec_val, recall_val
 
-    def _run_and_print_best_model(self, model_name, best_trial, warmup_instances):
+    def _run_and_print_best_model(self, model_name, best_trial, warmup_instances, recovery_window=1000):
         print(f"\n[RUN FINAL] Reconstruindo o melhor {model_name} para extração do relatório completo...")
         
         clean_params = best_trial.params.copy()
@@ -173,10 +173,11 @@ class AnomalyOptunaOptimizer:
         self.metrics.display_cumulative_metrics(
             predictions_history=predictions_history, 
             warmup_instances=min_warmup_required, 
-            target_class=self.target_class
+            target_class=self.target_class,
+            recovery_window=recovery_window
         )
 
-    def optimize(self, model_name, warmup_instances=0):
+    def optimize(self, model_name, warmup_instances=0, recovery_window=1000):
         if self.target_class is None:
             tgt_str = "Híbrido (Macro Global)"
         elif str(self.target_class).lower() == 'macro':
@@ -248,7 +249,7 @@ class AnomalyOptunaOptimizer:
         
         self.best_params[model_name] = study.best_params
         
-        self._run_and_print_best_model(model_name, best_trial, warmup_instances)
+        self._run_and_print_best_model(model_name, best_trial, warmup_instances, recovery_window)
         
         return study.best_params
 

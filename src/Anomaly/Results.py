@@ -1,13 +1,14 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.metrics import f1_score, precision_score, recall_score, matthews_corrcoef, confusion_matrix
+import warnings
+warnings.filterwarnings("ignore", message="A single label was found in 'y_true' and 'y_pred'.*")
 
 class Metrics:
     def get_metric_classifier(self, metrics_dict, metric_name, target_class=None):
         norm_metrics = {str(k).lower(): v for k, v in metrics_dict.items()}
         metric_name = str(metric_name).lower()
         
-        # CORREÇÃO 1: Se for None, agora trata corretamente como 'macro' em vez de forçar 0
         if target_class is None or str(target_class).lower() == 'macro':
             tc = 'macro'
         else:
@@ -18,11 +19,9 @@ class Metrics:
             val_1 = norm_metrics.get(f'{metric_name}_1', 0.0)
             val_0 = 0.0 if val_0 is None or np.isnan(val_0) else float(val_0)
             val_1 = 0.0 if val_1 is None or np.isnan(val_1) else float(val_1)
-            # CORREÇÃO 2: Removido o * 100.0 (CapyMOA já entrega de 0 a 100)
             return (val_0 + val_1) / 2.0
         else:
             val = norm_metrics.get(f'{metric_name}_{tc}')
-            # CORREÇÃO 2: Removido o * 100.0
             return float(val) if val is not None and not np.isnan(val) else 0.0
 
     def calc_sklearn_metrics(self, y_true, y_pred, target_class=None):
@@ -63,7 +62,76 @@ class Metrics:
             
         return f1 * 100.0, prec * 100.0, rec * 100.0, mcc, fpr * 100.0, tpr * 100.0
 
-    def display_cumulative_metrics(self, predictions_history, warmup_instances=0, target_class=None):
+    def extract_attack_regions(self, y_true_multi, normal_class_idx=0):
+        y_true_array = np.array(y_true_multi)
+        attack_indices = np.where(y_true_array != normal_class_idx)[0]
+        
+        attack_regions = []
+        if len(attack_indices) > 0:
+            start_idx = attack_indices[0]
+            last_idx = attack_indices[0]
+            for idx in attack_indices[1:]:
+                if idx - last_idx > 1000:
+                    block_labels = y_true_array[start_idx:last_idx+1]
+                    block_attack_labels = block_labels[block_labels != normal_class_idx]
+                    block_label = np.bincount(block_attack_labels).argmax() if len(block_attack_labels) > 0 else 1
+                    attack_regions.append((start_idx, last_idx, block_label))
+                    start_idx = idx
+                last_idx = idx
+            
+            block_labels = y_true_array[start_idx:last_idx+1]
+            block_attack_labels = block_labels[block_labels != normal_class_idx]
+            block_label = np.bincount(block_attack_labels).argmax() if len(block_attack_labels) > 0 else 1
+            attack_regions.append((start_idx, last_idx, block_label))
+            
+        return attack_regions
+
+    def calc_behavioral_metrics(self, y_true, y_pred, attack_regions, recovery_window=1000, warmup_instances=0, target_class=None):
+        """Calcula Passagem e Recuperação para cada onda de ataque individualmente"""
+        behavioral_data = []
+        for i, (start, end, label) in enumerate(attack_regions):
+            if end < warmup_instances:
+                behavioral_data.append({'ataque_idx': i + 1, 'passagem': 0.0, 'recuperacao': 0.0})
+                continue
+                
+            start_eff = max(start, warmup_instances)
+            
+            # F1 Inicio (antes da onda de ataque)
+            y_t_start = y_true[warmup_instances:start_eff]
+            y_p_start = y_pred[warmup_instances:start_eff]
+            f1_start = self.calc_sklearn_metrics(y_t_start, y_p_start, target_class)[0] if len(y_t_start) > 0 else 0.0
+            
+            # F1 Final (ao final da onda de ataque)
+            y_t_end = y_true[warmup_instances:end+1]
+            y_p_end = y_pred[warmup_instances:end+1]
+            f1_end = self.calc_sklearn_metrics(y_t_end, y_p_end, target_class)[0] if len(y_t_end) > 0 else 0.0
+            
+            # F1 Recuperação (após X amostras do fim da onda)
+            rec_idx = min(end + 1 + recovery_window, len(y_true))
+            y_t_rec = y_true[warmup_instances:rec_idx]
+            y_p_rec = y_pred[warmup_instances:rec_idx]
+            f1_rec = self.calc_sklearn_metrics(y_t_rec, y_p_rec, target_class)[0] if len(y_t_rec) > 0 else 0.0
+            
+            passagem = f1_end - f1_start
+            recuperacao = f1_rec - f1_end
+            
+            behavioral_data.append({
+                'ataque_idx': i + 1,
+                'passagem': passagem,
+                'recuperacao': recuperacao
+            })
+            
+        return behavioral_data
+
+    def display_cumulative_metrics(self, predictions_history, warmup_instances=0, target_class=None, attack_regions=None, recovery_window=1000, normal_class_idx=0):
+        if attack_regions is None or len(attack_regions) == 0:
+            first_name = list(predictions_history.keys())[0]
+            y_true_multi = predictions_history[first_name].get('true_labels_multi')
+            if y_true_multi is not None:
+                attack_regions = self.extract_attack_regions(y_true_multi, normal_class_idx)
+            else:
+                attack_regions = []
+
         header_base = f"{'Algoritmo':<22} | {'F1 (%)':<8} | {'Prec (%)':<8} | {'Rec (%)':<8} | {'MCC':<8} | {'Tempo (s)':<10}"
         line_len = len(header_base)
         
@@ -92,9 +160,20 @@ class Metrics:
 
             row_base = f"{name:<22} | {f1:<8.2f} | {prec:<8.2f} | {recall:<8.2f} | {mcc:<8.3f} | {exec_time:<10.2f}"
             print(row_base)
+            
+            # Printa as métricas de cada onda de ataque
+            print(f"{'-'*line_len}")
+            behavioral_data = self.calc_behavioral_metrics(y_true_full, y_pred_full, attack_regions, recovery_window, warmup_instances, target_class)
+            for b in behavioral_data:
+                idx = b['ataque_idx']
+                p = b['passagem']
+                r = b['recuperacao']
+                p_str = f"+{p:.2f}%" if p > 0 else f"{p:.2f}%"
+                r_str = f"+{r:.2f}%" if r > 0 else f"{r:.2f}%"
+                
+                print(f"  -> Ataque {idx}: Passagem: {p_str:<8} | Recuperação ({recovery_window} amostras): {r_str}")
         
         print(f"{'='*line_len}\n")
-
 
 class Plots:
     def __init__(self, target_names):

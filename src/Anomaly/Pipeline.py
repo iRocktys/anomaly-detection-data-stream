@@ -16,7 +16,7 @@ class AnomalyExperimentRunner:
         self.metrics = Metrics()
         self.plots = Plots(target_names)
 
-    def _run_anomaly_evaluation(self, stream, algorithms, window_size, title, warmup_instances=0, target_class=None, threshold=0.5, ae_keywords=None, dataset_name="Cenario"):
+    def _run_anomaly_evaluation(self, stream, algorithms, window_size, title, warmup_instances=0, target_class=None, threshold=0.5, ae_keywords=None, dataset_name="Cenario", recovery_window=1000):
        
         if ae_keywords is None:
             ae_keywords = ['AE', 'AUTOENCODER']
@@ -128,10 +128,16 @@ class AnomalyExperimentRunner:
                 block_label = 1
             attack_regions.append((start_idx, last_idx, block_label))
 
-        self.metrics.display_cumulative_metrics(predictions_history, warmup_instances=min_warmup_required, target_class=target_class)
+        self.metrics.display_cumulative_metrics(
+            predictions_history, 
+            warmup_instances=min_warmup_required, 
+            target_class=target_class,
+            attack_regions=attack_regions,
+            recovery_window=recovery_window,
+            normal_class_idx=self.normal_class_idx
+        )
+
         self.plots.plot_score(results_scores, attack_regions, title, threshold)
-        
-        # ATUALIZAÇÃO: Passando o target_class
         self.plots.plot_metrics(results_metrics, attack_regions, title, window_size, target_class)
 
         dados_finais = predictions_history[primeiro_algoritmo]
@@ -150,7 +156,7 @@ class AnomalyExperimentRunner:
             'exec_time': dados_finais.get('exec_time', 0.0)
         }
 
-    def _run_anomaly_DSPOT(self, stream, algorithms, window_size, title, warmup_instances=0, target_class=None, dspot_q=1e-3, dspot_depth=50, dspot_t_quantile=0.98):
+    def _run_anomaly_DSPOT(self, stream, algorithms, window_size, title, warmup_instances=0, target_class=None, dspot_q=1e-3, dspot_depth=50, dspot_t_quantile=0.98, recovery_window=1000):
         results_metrics = {}
         results_scores = {}
         attack_regions = []
@@ -249,10 +255,15 @@ class AnomalyExperimentRunner:
                 'exec_time': exec_time
             }
 
-        self.metrics.display_cumulative_metrics(predictions_history, warmup_instances=warmup_instances, target_class=target_class)
+        self.metrics.display_cumulative_metrics(
+            predictions_history, 
+            warmup_instances=warmup_instances, 
+            target_class=target_class,
+            attack_regions=attack_regions,
+            recovery_window=recovery_window,
+            normal_class_idx=self.normal_class_idx
+        )
         self.plots.plot_dspot_score(results_scores, attack_regions, title)
-        
-        # ATUALIZAÇÃO: Passando o target_class
         self.plots.plot_metrics(results_metrics, attack_regions, title, window_size, target_class)
 
         primeiro_algoritmo = list(algorithms.keys())[0]
