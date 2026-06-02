@@ -1,352 +1,296 @@
 import time
+import os
 import numpy as np
-from capymoa.evaluation import ClassificationEvaluator
-from src.Anomaly.Threshold import DSPOT
-from src.Anomaly.Results import Metrics, Plots
+from src.Results.Metrics import Metrics
+from src.Results.Plots import Plots
 
 class AnomalyExperimentRunner:
-    def __init__(self, target_names):
+    def __init__(self, target_names, n_runs=1):
         self.target_names = target_names
+        self.n_runs = n_runs
         self.normal_class_idx = 0
         for i, name in enumerate(target_names):
             if str(name).strip().upper() in ['BENIGN', 'NORMAL', '0']:
                 self.normal_class_idx = i
                 break
-                
         self.metrics = Metrics()
         self.plots = Plots(target_names)
 
-    def _run_anomaly_evaluation(self, stream, algorithms, window_size, title, warmup_instances=0, target_class=None, target_class_pass=None, threshold=0.5, ae_keywords=None, dataset_name="Cenario", recovery_window=1000):
-       
-        if ae_keywords is None:
-            ae_keywords = ['AE', 'AUTOENCODER']
+    def _parse_decision_strategy(self, decision_strategy):
+        strategy = str(decision_strategy or "raw").strip().lower()
 
-        results_metrics = {}
-        results_scores = {}
-        
-        predictions_history = {}
-        schema = stream.get_schema()
-        
-        min_warmup_required = max(warmup_instances, 0)
-
-        for alg_idx, (alg_name, learner) in enumerate(algorithms.items()):
-            start_time = time.time()
-            stream.restart()
-            evaluator_class = ClassificationEvaluator(schema=schema, window_size=window_size)
-            
-            history = {'instances': [], 'f1_score': [], 'precision': [], 'recall': []}
-            results_scores[alg_name] = {'scores': []}
-            
-            alg_true_labels = []
-            alg_true_labels_multi = []
-            alg_predicted_classes = []
-            
-            count = 0
-            is_normal_only_alg = any(kw.upper() in alg_name.upper() for kw in ae_keywords)
-
-            while stream.has_more_instances():
-                instance = stream.next_instance()
-                
-                true_label_multiclass = instance.y_index 
-                true_label_binary = 1 if true_label_multiclass != self.normal_class_idx else 0
-                
-                is_warmup_phase = count < min_warmup_required
-
-                score = learner.score_instance(instance) 
-                results_scores[alg_name]['scores'].append(score)
-                
-                predicted_class = 1 if score > threshold else 0
-                
-                alg_true_labels.append(true_label_binary)
-                alg_true_labels_multi.append(true_label_multiclass)
-                alg_predicted_classes.append(predicted_class)
-                
-                if count >= min_warmup_required:
-                    evaluator_class.update(true_label_binary, predicted_class)
-               
-                try:
-                    if is_normal_only_alg:
-                        if is_warmup_phase or predicted_class == 0:
-                            learner.train(instance)
-                    else:
-                        learner.train(instance)
-                except ValueError:
-                    pass
-
-                if count >= min_warmup_required and count > 0 and count % window_size == 0:
-                    class_metrics = evaluator_class.metrics_dict()
-                    f1_val = self.metrics.get_metric_classifier(class_metrics, 'f1_score', target_class=target_class)
-                    prec_val = self.metrics.get_metric_classifier(class_metrics, 'precision', target_class=target_class)
-                    recall_val = self.metrics.get_metric_classifier(class_metrics, 'recall', target_class=target_class)
-
-                    history['instances'].append(count)
-                    history['f1_score'].append(f1_val)
-                    history['precision'].append(prec_val)
-                    history['recall'].append(recall_val)
-                        
-                count += 1
-                
-            exec_time = time.time() - start_time
-            results_metrics[alg_name] = history
-            
-            predictions_history[alg_name] = {
-                'true_labels': alg_true_labels,
-                'true_labels_multi': alg_true_labels_multi, 
-                'predicted_classes': alg_predicted_classes,
-                'exec_time': exec_time
-            }
-
-        primeiro_algoritmo = list(algorithms.keys())[0]
-        y_true_array = np.array(predictions_history[primeiro_algoritmo]['true_labels'])
-        y_true_multi = np.array(predictions_history[primeiro_algoritmo]['true_labels_multi'])
-        
-        attack_indices = np.where(y_true_array == 1)[0]
-        
-        attack_regions = []
-        if len(attack_indices) > 0:
-            start_idx = attack_indices[0]
-            last_idx = attack_indices[0]
-            for idx in attack_indices[1:]:
-                if idx - last_idx > 1000:
-                    block_labels = y_true_multi[start_idx:last_idx+1]
-                    block_attack_labels = block_labels[block_labels != self.normal_class_idx]
-                    
-                    if len(block_attack_labels) > 0:
-                        block_label = np.bincount(block_attack_labels).argmax()
-                    else:
-                        block_label = 1
-                        
-                    attack_regions.append((start_idx, last_idx, block_label))
-                    start_idx = idx
-                last_idx = idx
-            
-            block_labels = y_true_multi[start_idx:last_idx+1]
-            block_attack_labels = block_labels[block_labels != self.normal_class_idx]
-            if len(block_attack_labels) > 0:
-                block_label = np.bincount(block_attack_labels).argmax()
-            else:
-                block_label = 1
-            attack_regions.append((start_idx, last_idx, block_label))
-
-        self.metrics.display_cumulative_metrics(
-            predictions_history, 
-            warmup_instances=min_warmup_required, 
-            target_class=target_class,
-            target_class_pass=target_class_pass,
-            attack_regions=attack_regions,
-            recovery_window=recovery_window,
-            normal_class_idx=self.normal_class_idx
+        if strategy == "raw":
+            return {"name": "raw", "type": "raw", "window": None, "k": None, "n": None}
+        if strategy.startswith("moving_average_w"):
+            window = int(strategy.split("_w")[-1])
+            return {"name": strategy, "type": "moving_average", "window": window, "k": None, "n": None}
+        if strategy.startswith("persistence_") and "_of_" in strategy:
+            left, right = strategy.replace("persistence_", "").split("_of_")
+            k, n = int(left), int(right)
+            if k <= 0 or n <= 0 or k > n:
+                raise ValueError("A persistência precisa obedecer 0 < k <= n.")
+            return {"name": strategy, "type": "persistence", "window": None, "k": k, "n": n}
+        raise ValueError(
+            "decision_strategy deve ser uma destas: raw, moving_average_w3, "
+            "moving_average_w5, persistence_2_of_3, persistence_3_of_5."
         )
 
-        self.plots.plot_score(results_scores, attack_regions, title, threshold)
-        self.plots.plot_metrics(results_metrics, attack_regions, title, window_size, target_class)
+    def _combined_strategy_name(self, threshold_strategy, decision_config):
+        return os.path.join(str(threshold_strategy), decision_config["name"])
 
-        dados_finais = predictions_history[primeiro_algoritmo]
-        y_true_final = dados_finais['true_labels'][min_warmup_required:] if len(dados_finais['true_labels']) > min_warmup_required else dados_finais['true_labels']
-        y_pred_final = dados_finais['predicted_classes'][min_warmup_required:] if len(dados_finais['predicted_classes']) > min_warmup_required else dados_finais['predicted_classes']
+    def _causal_moving_average(self, values, window):
+        if not values:
+            return 0.0
+        recent = values[-max(1, int(window)):]
+        return float(np.mean(recent))
+
+    def _build_causal_moving_average_series(self, values, window):
+        values = list(values)
+        if not values:
+            return []
+        return [float(np.mean(values[max(0, i - window + 1):i + 1])) for i in range(len(values))]
+
+    def _compute_z_threshold(self, warmup_scores, z_value, decision_config):
+        if decision_config["type"] == "moving_average":
+            reference_scores = self._build_causal_moving_average_series(warmup_scores, decision_config["window"])
+        else:
+            reference_scores = list(warmup_scores)
+        if not reference_scores:
+            return 0.5, None, None
+        mu = float(np.mean(reference_scores))
+        std = float(np.std(reference_scores))
+        return mu + (float(z_value) * std), mu, std
+
+    def _apply_decision_rule(self, score, threshold, score_history, peak_history, decision_config):
+        if decision_config["type"] == "moving_average":
+            decision_score = self._causal_moving_average(score_history, decision_config["window"])
+            return 1 if decision_score > threshold else 0
+        if decision_config["type"] == "persistence":
+            is_peak = 1 if score > threshold else 0
+            peak_history.append(is_peak)
+            recent = peak_history[-decision_config["n"]:]
+            return 1 if sum(recent) >= decision_config["k"] else 0
+        return 1 if score > threshold else 0
+
+    def prequential_test(self, stream, learner, discretization, is_ae, window_evaluation, warmup_instances, z_value=None, decision_strategy="raw"):
+        decision_config = self._parse_decision_strategy(decision_strategy)
+        stream.restart()
+        y_true_list, y_pred_list, true_labels_multi, scores = [], [], [], []
+        instances_list, f1_list, prec_list, rec_list = [], [], [], []
+        fp_list, fn_list = [], []
+        warmup_scores = []
+        score_history = []
+        peak_history = []
         
-        f1_final, prec_final, recall_final, mcc_final, fpr_final, tpr_final = self.metrics.calc_sklearn_metrics(y_true_final, y_pred_final, target_class)
+        run_threshold = discretization if isinstance(discretization, (float, int)) else 0.5
+        count = 0
+        calc_mu, calc_std = None, None
         
-        return {
-            'f1_score': f1_final,
-            'precision': prec_final,
-            'recall': recall_final,
-            'mcc': mcc_final,
-            'fpr': fpr_final,
-            'tpr': tpr_final,
-            'exec_time': dados_finais.get('exec_time', 0.0)
-        }
-
-    def _run_anomaly_DSPOT(self, stream, algorithms, window_size, title, warmup_instances=0, target_class=None, target_class_pass=None, dspot_q=1e-3, dspot_depth=50, dspot_t_quantile=0.98, recovery_window=1000):
-        results_metrics = {}
-        results_scores = {}
-        attack_regions = []
-        
-        predictions_history = {}
-        schema = stream.get_schema()
-
-        for alg_idx, (alg_name, learner) in enumerate(algorithms.items()):
-            start_time = time.time()
-            stream.restart()
-            evaluator_class = ClassificationEvaluator(schema=schema, window_size=window_size)
+        while stream.has_more_instances():
+            instance = stream.next_instance()
+            true_label_multiclass = instance.y_index
+            binary_true_label = 1 if true_label_multiclass > 0 else 0
             
-            dspot = DSPOT(q=dspot_q, depth=dspot_depth, t_quantile=dspot_t_quantile)
+            score = learner.score_instance(instance) 
+            scores.append(score)
+            score_history.append(score)
+            true_labels_multi.append(true_label_multiclass)
             
-            history = {'instances': [], 'f1_score': [], 'precision': [], 'recall': []}
-            results_scores[alg_name] = {'scores': [], 'thresholds': [], 'trends': []}
-            
-            alg_true_labels = []
-            alg_predicted_classes = []
-            
-            count = 0
-            in_attack = False
-            start_attack = 0
-            current_attack_label = None
-            is_normal_only_alg = any(kw.upper() in alg_name.upper() for kw in ['AE', 'AUTOENCODER'])
-
-            while stream.has_more_instances():
-                instance = stream.next_instance()
-                
-                true_label_multiclass = instance.y_index 
-                true_label_binary = 1 if true_label_multiclass != self.normal_class_idx else 0
-                
-                if alg_idx == 0:
-                    is_attack = (true_label_binary == 1)
-                    
-                    if is_attack:
-                        if not in_attack:
-                            in_attack = True
-                            start_attack = count
-                            current_attack_label = true_label_multiclass
-                        elif current_attack_label != true_label_multiclass:
-                            attack_regions.append((start_attack, count, current_attack_label))
-                            start_attack = count
-                            current_attack_label = true_label_multiclass
-                    else:
-                        if in_attack:
-                            in_attack = False
-                            attack_regions.append((start_attack, count, current_attack_label))
-
-                score = learner.score_instance(instance) 
-                
-                predicted_class, dyn_thresh, local_trend = dspot.update_and_predict(score, warmup_instances)
-                
-                results_scores[alg_name]['scores'].append(score)
-                results_scores[alg_name]['thresholds'].append(dyn_thresh)
-                results_scores[alg_name]['trends'].append(local_trend)
-                
-                alg_true_labels.append(true_label_binary)
-                alg_predicted_classes.append(predicted_class)
-                
-                if count >= warmup_instances:
-                    evaluator_class.update(true_label_binary, predicted_class)
-               
-                try:
-                    if is_normal_only_alg:
-                        if count < warmup_instances or predicted_class == 0:
-                            learner.train(instance)
-                    else:
-                        learner.train(instance)
-                except ValueError:
-                    pass
-
-                if count >= warmup_instances and count > 0 and count % window_size == 0:
-                    class_metrics = evaluator_class.metrics_dict()
-                    
-                    f1_val = self.metrics.get_metric_classifier(class_metrics, 'f1_score', target_class=target_class)
-                    prec_val = self.metrics.get_metric_classifier(class_metrics, 'precision', target_class=target_class)
-                    recall_val = self.metrics.get_metric_classifier(class_metrics, 'recall', target_class=target_class)
-
-                    history['instances'].append(count)
-                    history['f1_score'].append(f1_val)
-                    history['precision'].append(prec_val)
-                    history['recall'].append(recall_val)
-                        
-                count += 1
-                
-            if alg_idx == 0 and in_attack:
-                attack_regions.append((start_attack, count, current_attack_label))
-                
-            exec_time = time.time() - start_time
-            results_metrics[alg_name] = history
-            
-            predictions_history[alg_name] = {
-                'true_labels': alg_true_labels,
-                'predicted_classes': alg_predicted_classes,
-                'exec_time': exec_time
-            }
-
-        self.metrics.display_cumulative_metrics(
-            predictions_history, 
-            warmup_instances=warmup_instances, 
-            target_class=target_class,
-            target_class_pass=target_class_pass,
-            attack_regions=attack_regions,
-            recovery_window=recovery_window,
-            normal_class_idx=self.normal_class_idx
-        )
-        self.plots.plot_dspot_score(results_scores, attack_regions, title)
-        self.plots.plot_metrics(results_metrics, attack_regions, title, window_size, target_class)
-
-        primeiro_algoritmo = list(algorithms.keys())[0]
-        dados_finais = predictions_history[primeiro_algoritmo]
-        
-        y_true_final = dados_finais['true_labels'][warmup_instances:] if len(dados_finais['true_labels']) > warmup_instances else dados_finais['true_labels']
-        y_pred_final = dados_finais['predicted_classes'][warmup_instances:] if len(dados_finais['predicted_classes']) > warmup_instances else dados_finais['predicted_classes']
-        
-        f1_final, prec_final, recall_final, mcc_final, fpr_final, tpr_final = self.metrics.calc_sklearn_metrics(y_true_final, y_pred_final, target_class)
-        
-        return {
-            'f1_score': f1_final,
-            'precision': prec_final,
-            'recall': recall_final,
-            'mcc': mcc_final,
-            'fpr': fpr_final,
-            'tpr': tpr_final,
-            'exec_time': dados_finais.get('exec_time', 0.0)
-        }
-
-    def _run_poisoning_evolution(self, scenarios_dict, threshold_type='dspot', fixed_threshold=0.5, warmup_instances=0, dspot_q=1e-3, dspot_depth=50):
-        results_scores = {}
-        
-        for ds_name, setup in scenarios_dict.items():
-            start_time = time.time()
-            stream = setup['stream']
-            learner = setup['learner']
-            stream.restart()
-            
-            if threshold_type == 'dspot':
-                dspot = DSPOT(q=dspot_q, depth=dspot_depth)
-                
-            results_scores[ds_name] = {'scores': [], 'thresholds': [], 'trends': [], 'attack_regions': []}
-            
-            count = 0
-            in_attack = False
-            start_attack = 0
-            current_attack_label = None
-            
-            while stream.has_more_instances():
-                instance = stream.next_instance()
-                true_label_multiclass = instance.y_index 
-                true_label_binary = 1 if true_label_multiclass != self.normal_class_idx else 0
-                
-                is_attack = (true_label_binary == 1)
-                
-                if is_attack:
-                    if not in_attack:
-                        in_attack = True
-                        start_attack = count
-                        current_attack_label = true_label_multiclass
-                    elif current_attack_label != true_label_multiclass:
-                        results_scores[ds_name]['attack_regions'].append((start_attack, count, current_attack_label))
-                        start_attack = count
-                        current_attack_label = true_label_multiclass
-                else:
-                    if in_attack:
-                        in_attack = False
-                        results_scores[ds_name]['attack_regions'].append((start_attack, count, current_attack_label))
-
-                score = learner.score_instance(instance) 
-                
-                if threshold_type == 'dspot':
-                    predicted_class, dyn_thresh, local_trend = dspot.update_and_predict(score, warmup_instances)
-                    results_scores[ds_name]['thresholds'].append(dyn_thresh)
-                    results_scores[ds_name]['trends'].append(local_trend)
-                else:
-                    predicted_class = 1 if score > fixed_threshold else 0
-
-                results_scores[ds_name]['scores'].append(score)
-                
+            if count < warmup_instances:
+                warmup_scores.append(score)
+                predicted_class = 0
                 try:
                     learner.train(instance)
                 except ValueError:
                     pass
-                        
-                count += 1
+            else:
+                if count == warmup_instances and z_value is not None and warmup_instances > 0:
+                    run_threshold, calc_mu, calc_std = self._compute_z_threshold(warmup_scores, z_value, decision_config)
+
+                if discretization == 'params':
+                    pred = learner.predict(instance)
+                    predicted_class = 1 if (pred is not None and pred > 0) else 0
+                else:
+                    predicted_class = self._apply_decision_rule(score, run_threshold, score_history, peak_history, decision_config)
                 
-            if in_attack:
-                results_scores[ds_name]['attack_regions'].append((start_attack, count, current_attack_label))
+                try:
+                    if not is_ae or predicted_class == 0:
+                        learner.train(instance)
+                except ValueError:
+                    pass
+            
+            y_true_list.append(binary_true_label)
+            y_pred_list.append(predicted_class)
+            
+            if count >= warmup_instances and count > 0 and count % window_evaluation == 0:
+                start_idx = max(warmup_instances, len(y_true_list) - window_evaluation)
+                y_t_win = y_true_list[start_idx:]
+                y_p_win = y_pred_list[start_idx:]
+
+                # Métricas janeladas: mostram a variação local de desempenho em cada bloco,
+                # permitindo observar quedas/subidas nas regiões de ataque.
+                f1_v, prec_v, rec_v, _, fp, fn = self.metrics.calc_sklearn_metrics(y_t_win, y_p_win)
                 
-            results_scores[ds_name]['exec_time'] = time.time() - start_time
+                instances_list.append(count)
+                f1_list.append(f1_v)
+                prec_list.append(prec_v)
+                rec_list.append(rec_v)
+                fp_list.append(fp)
+                fn_list.append(fn)
+                    
+            count += 1
+            
+        return {
+            'y_true': y_true_list,
+            'y_pred': y_pred_list,
+            'true_labels_multi': true_labels_multi,
+            'scores': scores,
+            'instances': instances_list,
+            'f1': f1_list,
+            'precision': prec_list,
+            'recall': rec_list,
+            'fp': fp_list,
+            'fn': fn_list,
+            'z_stats': {'mu': calc_mu, 'std': calc_std, 'threshold': run_threshold}
+        }
+
+    def run_anomaly_evaluation(self, stream, algorithms, window_evaluation=1000, title="Avaliação Prequencial", warmup_instances=0, discretization=0.5, ae_keywords=None, algorithm_params=None, is_optimized=True, num_features=None, exec_id="N/A", decision_strategy="raw"):
+        if ae_keywords is None:
+            ae_keywords = ['AE', 'AUTOENCODER']
+
+        decision_config = self._parse_decision_strategy(decision_strategy)
+        predictions_history = {}
+        
+        param_type = "Optimized" if is_optimized else "Default"
+        feat_type = "FullFeatures" if (num_features is None or num_features > 50) else "33Features"
+        final_scenario_name = f"{param_type}_{feat_type}"
+        
+        if not is_optimized:
+            z_value = None
+            strategy_name = 'fixed'
+        else:
+            z_value = algorithm_params.get('z') if algorithm_params else None
+            
+            if discretization == 'params':
+                strategy_name = 'params'
+            elif discretization == 'dinamic':
+                strategy_name = 'dinamic'
+            elif algorithm_params and 'z' in algorithm_params:
+                strategy_name = 'z_score'
+            else:
+                strategy_name = 'fixed'
+        
+        for alg_name, learner_or_factory in algorithms.items():
+            is_ae = any(kw.upper() in alg_name.upper() for kw in ae_keywords)
+            runs_data = []
+            exec_times = []
+            mu_list, std_list, thresh_list = [], [], []
+            
+            print(f"\n[{alg_name}] Executando {self.n_runs} rodada(s) prequencial(is) | Decisão: {decision_config['name']}...")
+            for run in range(self.n_runs):
+                start_time = time.time()
+                current_seed = 42 + run
                 
-        return results_scores
+                if callable(learner_or_factory):
+                    learner = learner_or_factory(run_seed=current_seed)
+                else:
+                    learner = learner_or_factory
+                    if run > 0 and hasattr(learner, 'reset'):
+                        learner.reset()
+                    
+                result = self.prequential_test(stream, learner, discretization, is_ae, window_evaluation, warmup_instances, z_value=z_value, decision_strategy=decision_config["name"])
+                exec_times.append(time.time() - start_time)
+                runs_data.append(result)
+                
+                if result['z_stats']['threshold'] is not None:
+                    mu_list.append(result['z_stats']['mu'])
+                    std_list.append(result['z_stats']['std'])
+                    thresh_list.append(result['z_stats']['threshold'])
+            
+            f1_matrix = np.array([r['f1'] for r in runs_data])
+            prec_matrix = np.array([r['precision'] for r in runs_data])
+            rec_matrix = np.array([r['recall'] for r in runs_data])
+            fp_matrix = np.array([r['fp'] for r in runs_data])
+            fn_matrix = np.array([r['fn'] for r in runs_data])
+            scores_matrix = np.array([r['scores'] for r in runs_data])
+            
+            cum_metrics_list = []
+            true_labels_multi = runs_data[0]['true_labels_multi']
+            
+            for r in runs_data:
+                y_t = np.array(r['y_true'])[warmup_instances:] if len(r['y_true']) > warmup_instances else np.array(r['y_true'])
+                y_p = np.array(r['y_pred'])[warmup_instances:] if len(r['y_pred']) > warmup_instances else np.array(r['y_pred'])
+                cum_metrics_list.append(self.metrics.calc_sklearn_metrics(y_t, y_p))
+                
+            cum_matrix = np.array(cum_metrics_list) 
+            
+            predictions_history[alg_name] = {
+                'instances': runs_data[0]['instances'],
+                'f1_mean': np.mean(f1_matrix, axis=0) if len(f1_matrix[0]) > 0 else [],
+                'f1_std': np.std(f1_matrix, axis=0) if self.n_runs > 1 and len(f1_matrix[0]) > 0 else (np.zeros_like(f1_matrix[0]) if len(f1_matrix[0]) > 0 else []),
+                'precision_mean': np.mean(prec_matrix, axis=0) if len(prec_matrix[0]) > 0 else [],
+                'precision_std': np.std(prec_matrix, axis=0) if self.n_runs > 1 and len(prec_matrix[0]) > 0 else (np.zeros_like(prec_matrix[0]) if len(prec_matrix[0]) > 0 else []),
+                'recall_mean': np.mean(rec_matrix, axis=0) if len(rec_matrix[0]) > 0 else [],
+                'recall_std': np.std(rec_matrix, axis=0) if self.n_runs > 1 and len(rec_matrix[0]) > 0 else (np.zeros_like(rec_matrix[0]) if len(rec_matrix[0]) > 0 else []),
+                'fp_mean': np.mean(fp_matrix, axis=0) if len(fp_matrix[0]) > 0 else [],
+                'fp_std': np.std(fp_matrix, axis=0) if self.n_runs > 1 and len(fp_matrix[0]) > 0 else (np.zeros_like(fp_matrix[0]) if len(fp_matrix[0]) > 0 else []),
+                'fn_mean': np.mean(fn_matrix, axis=0) if len(fn_matrix[0]) > 0 else [],
+                'fn_std': np.std(fn_matrix, axis=0) if self.n_runs > 1 and len(fn_matrix[0]) > 0 else (np.zeros_like(fn_matrix[0]) if len(fn_matrix[0]) > 0 else []),
+                'scores_mean': np.mean(scores_matrix, axis=0) if len(scores_matrix[0]) > 0 else [],
+                'scores_std': np.std(scores_matrix, axis=0) if self.n_runs > 1 and len(scores_matrix[0]) > 0 else (np.zeros_like(scores_matrix[0]) if len(scores_matrix[0]) > 0 else []),
+                'exec_time_mean': np.mean(exec_times),
+                'exec_time_std': np.std(exec_times) if self.n_runs > 1 else 0.0,
+                'cumulative': {
+                    'f1': (np.mean(cum_matrix[:, 0]), np.std(cum_matrix[:, 0]) if self.n_runs > 1 else 0.0),
+                    'prec': (np.mean(cum_matrix[:, 1]), np.std(cum_matrix[:, 1]) if self.n_runs > 1 else 0.0),
+                    'rec': (np.mean(cum_matrix[:, 2]), np.std(cum_matrix[:, 2]) if self.n_runs > 1 else 0.0),
+                    'mcc': (np.mean(cum_matrix[:, 3]), np.std(cum_matrix[:, 3]) if self.n_runs > 1 else 0.0),
+                    'fp': (np.mean(cum_matrix[:, 4]), np.std(cum_matrix[:, 4]) if self.n_runs > 1 else 0.0),
+                    'fn': (np.mean(cum_matrix[:, 5]), np.std(cum_matrix[:, 5]) if self.n_runs > 1 else 0.0)
+                },
+                'true_labels_multi': true_labels_multi
+            }
+
+        first_algo = list(algorithms.keys())[0]
+        attack_regions = self.metrics.extract_attack_regions(predictions_history[first_algo]['true_labels_multi'], normal_class_idx=self.normal_class_idx)
+        
+        display_params = dict(algorithm_params) if algorithm_params else {}
+        display_params['decision_strategy'] = decision_config['name']
+        display_params['decision_type'] = decision_config['type']
+        display_params['decision_window'] = decision_config.get('window')
+        display_params['persistence_k'] = decision_config.get('k')
+        display_params['persistence_n'] = decision_config.get('n')
+        if z_value is not None and thresh_list:
+            display_params['u'] = float(np.mean(mu_list))
+            display_params['std'] = float(np.mean(std_list))
+            final_discretization = float(np.mean(thresh_list))
+        else:
+            final_discretization = discretization
+
+        if not is_optimized:
+            output_strategy_name = 'fixed'
+        else:
+            output_strategy_name = self._combined_strategy_name(strategy_name, decision_config)
+        
+        self.metrics.display_cumulative_metrics(
+            predictions_history=predictions_history,
+            warmup_instances=warmup_instances,
+            n_runs=self.n_runs,
+            params_dict=display_params,
+            experiment_name=title,
+            scenario_name=final_scenario_name,
+            discretization=final_discretization,
+            window_evaluation=window_evaluation,
+            exec_id=exec_id,
+            discretization_strategy=output_strategy_name,
+            task_type="anomaly",
+            threshold_strategy=strategy_name,
+            decision_strategy=decision_config["name"],
+            decision_window=decision_config.get("window"),
+            persistence_k=decision_config.get("k"),
+            persistence_n=decision_config.get("n")
+        )
+        
+        self.plots.plot_metrics(results=predictions_history, attack_regions=attack_regions, title=title, window_size=window_evaluation, scenario_name=final_scenario_name, discretization_strategy=output_strategy_name)
+        self.plots.plot_fp_fn(results=predictions_history, attack_regions=attack_regions, title=title, window_size=window_evaluation, scenario_name=final_scenario_name, discretization_strategy=output_strategy_name)
+        self.plots.plot_score(results=predictions_history, attack_regions=attack_regions, title=title, discretization=final_discretization if final_discretization != 'params' else 0.5, scenario_name=final_scenario_name, discretization_strategy=output_strategy_name)
