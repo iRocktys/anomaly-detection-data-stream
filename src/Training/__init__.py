@@ -1,1 +1,5 @@
-from src.Training.TrainingStrategies import NoTrainingStrategy, TrainAllStrategy, TrainOracleNormalStrategy
+from src.Training.TrainingStrategies import (
+    BaseTrainingStrategy,
+    TrainAllStrategy,
+    TrainPredictedNormalStrategy,
+)

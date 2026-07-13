@@ -25,6 +25,7 @@ class JupyterExperiment:
         ignoredColumns=None,
         imputationMethod="0",
         normalClassIndex=0,
+        warmup=200,
         movingAverageWindows=None,
         runSeeds=None,
         runSeed=None,
@@ -40,6 +41,7 @@ class JupyterExperiment:
         self.featureSmoother = ComponentConfig("none")
         self.trainingStrategy = ComponentConfig("all")
         self.normalizerUpdatePolicy = "all"
+        self.warmup = int(warmup)
         self.movingAverageWindows = list(movingAverageWindows or [3, 5, 10, 50, 100])
         resolvedSeeds = runSeeds if runSeeds is not None else [1 if runSeed is None else runSeed]
         self.runSeeds = [int(seed) for seed in resolvedSeeds]
@@ -49,7 +51,7 @@ class JupyterExperiment:
             saveWindowMetrics=bool(saveWindowMetrics),
             printSummary=bool(printSummary),
         )
-        self.defaultThreshold = ComponentConfig("fixed", {"value": 0.5})
+        self.defaultThreshold = ComponentConfig("dspot")
         self.defaultScoreSmoother = ComponentConfig("none")
         self.defaultDecision = ComponentConfig("threshold")
         self.defaultEvaluationEnabled = False
@@ -119,7 +121,7 @@ class JupyterExperiment:
     def addThresholdEvaluation(
         self,
         name,
-        thresholdName="fixed",
+        thresholdName="dspot",
         thresholdParameters=None,
         scoreSmootherName="none",
         scoreSmootherParameters=None,
@@ -168,7 +170,7 @@ class JupyterExperiment:
         self.defaultEvaluationEnabled = True
         return self
 
-    def setThreshold(self, name="fixed", parameters=None):
+    def setThreshold(self, name="dspot", parameters=None):
         self.defaultThreshold = self.createComponent(name, parameters)
         self.defaultEvaluationEnabled = True
         return self
@@ -179,7 +181,38 @@ class JupyterExperiment:
         return self
 
     def setTrainingStrategy(self, name="all", parameters=None):
-        self.trainingStrategy = self.createComponent(name, parameters)
+        """Seleciona como o modelo será atualizado durante o fluxo.
+
+        ``all`` é o padrão e treina com todas as instâncias. ``predictedNormal``
+        treina durante o warmup e, depois, somente com instâncias classificadas
+        como normais pela avaliação de threshold indicada em ``evaluationName``.
+        """
+        aliases = {
+            "all": "all",
+            "trainall": "all",
+            "predictednormal": "predictedNormal",
+            "normalprediction": "predictedNormal",
+            "predictednormalonly": "predictedNormal",
+        }
+        normalizedName = "".join(
+            character
+            for character in str(name or "").lower()
+            if character.isalnum()
+        )
+        if normalizedName not in aliases:
+            raise ValueError("Estratégia deve ser all ou predictedNormal.")
+        self.trainingStrategy = self.createComponent(
+            aliases[normalizedName],
+            parameters,
+        )
+        if aliases[normalizedName] == "predictedNormal":
+            self.defaultEvaluationEnabled = True
+        return self
+
+    def setWarmup(self, warmup):
+        self.warmup = int(warmup)
+        if self.warmup < 20:
+            raise ValueError("warmup deve ser maior ou igual a 20.")
         return self
 
     def setNormalizerUpdatePolicy(self, policyName="all"):
@@ -243,6 +276,7 @@ class JupyterExperiment:
             featureSmoother=self.featureSmoother,
             trainingStrategy=self.trainingStrategy,
             normalizerUpdatePolicy=self.normalizerUpdatePolicy,
+            warmup=self.warmup,
             movingAverageWindows=list(self.movingAverageWindows),
             runSeeds=list(self.runSeeds),
             output=self.output,
@@ -259,7 +293,17 @@ class JupyterExperiment:
 
     def runScores(self, runId=None):
         from src.Pipeline.ExperimentRunner import ExperimentRunner
-        return ExperimentRunner(self.buildPlan(includeDefaultEvaluation=False)).runScores(runId=runId)
+        includeEvaluation = (
+            "".join(
+                character
+                for character in str(self.trainingStrategy.name).lower()
+                if character.isalnum()
+            )
+            in {"predictednormal", "normalprediction", "predictednormalonly"}
+        )
+        return ExperimentRunner(
+            self.buildPlan(includeDefaultEvaluation=includeEvaluation)
+        ).runScores(runId=runId)
 
     def evaluateScores(self, scoreFiles, runId=None):
         from src.Pipeline.ExperimentRunner import ExperimentRunner
@@ -298,6 +342,7 @@ def runJupyterExperiment(
     normalizerNames=None,
     normalizerParameters=None,
     rollingWindow=200,
+    warmup=200,
     normalizerUpdatePolicy="all",
     trainingStrategy="all",
     trainingParameters=None,
@@ -309,7 +354,7 @@ def runJupyterExperiment(
     featureSmootherParameters=None,
     scoreSmoother="none",
     scoreSmootherParameters=None,
-    thresholdName="fixed",
+    thresholdName="dspot",
     thresholdParameters=None,
     decisionStrategy="threshold",
     decisionParameters=None,
@@ -327,6 +372,7 @@ def runJupyterExperiment(
         selectedFeatures=selectedFeatures,
         datasetName=datasetName,
         outputDirectory=outputDirectory,
+        warmup=warmup,
         movingAverageWindows=movingAverageWindows,
         runSeeds=runSeeds if runSeeds is not None else [runSeed],
         saveNormalizedFeatures=saveNormalizedFeatures,
@@ -364,7 +410,7 @@ def runJupyterExperiment(
         experiment.addThresholdEvaluation(
             name="default",
             thresholdName=thresholdName,
-            thresholdParameters=thresholdParameters or {"value": 0.5},
+            thresholdParameters=thresholdParameters or {},
             scoreSmootherName=scoreSmoother,
             scoreSmootherParameters=scoreSmootherParameters,
             decisionName=decisionStrategy,

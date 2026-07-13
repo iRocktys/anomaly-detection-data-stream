@@ -4,7 +4,14 @@ import numpy as np
 
 
 class StreamPipeline:
-    """Gera scores causais. Thresholds e decisões não pertencem a esta etapa."""
+    """Gera scores causais e executa a política de treinamento online.
+
+    Com ``trainingStrategy=all`` o modelo aprende com todas as instâncias e os
+    thresholds permanecem desacoplados para replay posterior. Com
+    ``trainingStrategy=predictedNormal`` a avaliação escolhida é executada no
+    próprio fluxo, pois sua predição define se a instância atual pode treinar o
+    modelo e, consequentemente, altera os scores futuros.
+    """
 
     def __init__(self, plan, datasetConfig, components, featureNames):
         self.plan = plan
@@ -45,17 +52,93 @@ class StreamPipeline:
             normalizedValues=normalizedValues,
         )
 
-        if self.components["trainingStrategy"].shouldTrain(trueLabel, isAttack):
-            try:
-                self.components["model"].train(modelInstance)
-            except ValueError:
-                pass
+        trainingDecision = self.evaluateTrainingDecision(
+            row=row,
+            instanceId=instanceId,
+            trueLabel=trueLabel,
+            isAttack=isAttack,
+        )
+        feedbackComponents = trainingDecision.pop("feedbackComponents", None)
+        shouldTrain = self.components["trainingStrategy"].shouldTrain(
+            prediction=trainingDecision.get("trainingPrediction"),
+            thresholdReady=trainingDecision.get("trainingThresholdReady", False),
+            isWarmup=bool(row["isWarmup"]),
+            trueLabel=trueLabel,
+            isAttack=isAttack,
+        )
+        row.update(trainingDecision)
+        row["trainingAllowed"] = int(bool(shouldTrain))
+        row["wasTrained"] = int(self.trainModel(modelInstance) if shouldTrain else False)
 
         self.components["featureExtractor"].update(rawValues)
         if self.shouldUpdateNormalizer(isAttack):
             self.components["normalizer"].update(extractedValues)
         self.components["featureSmoother"].update(normalizedValues)
+        self.updateTrainingDecision(trainingDecision, trueLabel, feedbackComponents)
         return row
+
+    def evaluateTrainingDecision(self, row, instanceId, trueLabel, isAttack):
+        feedbackEvaluation = self.components.get("feedbackEvaluation")
+        feedbackComponents = self.components.get("feedbackComponents")
+        if feedbackEvaluation is None or feedbackComponents is None:
+            return {
+                "trainingFeedbackEvaluation": None,
+                "trainingScore": np.nan,
+                "trainingThreshold": np.nan,
+                "trainingThresholdReady": False,
+                "trainingPrediction": np.nan,
+            }
+
+        scoreColumn = feedbackEvaluation.scoreColumn
+        if scoreColumn not in row:
+            raise ValueError(
+                f"A coluna {scoreColumn} não está disponível durante o treinamento online. "
+                f"Disponíveis: {list(row)}"
+            )
+        sourceScore = float(row[scoreColumn])
+        smoothScore = float(feedbackComponents["scoreSmoother"].transform(sourceScore))
+        thresholdValue = float(feedbackComponents["threshold"].getThreshold())
+        isWarmup = instanceId < int(self.plan.warmup)
+        thresholdReady = bool(feedbackComponents["threshold"].isReady()) and not isWarmup
+        prediction = int(
+            feedbackComponents["decision"].predict(
+                smoothScore,
+                thresholdValue,
+                thresholdReady,
+            )
+        )
+        return {
+            "trainingFeedbackEvaluation": feedbackEvaluation.name,
+            "trainingSourceScore": sourceScore,
+            "trainingScore": smoothScore,
+            "trainingThreshold": thresholdValue,
+            "trainingThresholdReady": bool(thresholdReady),
+            "trainingPrediction": prediction,
+            "feedbackComponents": feedbackComponents,
+        }
+
+    def updateTrainingDecision(self, trainingDecision, trueLabel, feedbackComponents):
+        if feedbackComponents is None:
+            return
+        sourceScore = float(trainingDecision["trainingSourceScore"])
+        smoothScore = float(trainingDecision["trainingScore"])
+        thresholdValue = float(trainingDecision["trainingThreshold"])
+        prediction = int(trainingDecision["trainingPrediction"])
+        feedbackComponents["scoreSmoother"].update(sourceScore)
+        feedbackComponents["decision"].update(
+            smoothScore,
+            thresholdValue,
+            prediction,
+            int(trueLabel),
+        )
+        feedbackComponents["threshold"].update(smoothScore)
+
+    def trainModel(self, modelInstance):
+        try:
+            self.components["model"].train(modelInstance)
+            return True
+        except ValueError:
+            return False
 
     def shouldUpdateNormalizer(self, isAttack):
         policy = self.plan.normalizerUpdatePolicy
@@ -96,7 +179,9 @@ class StreamPipeline:
             "modelName": self.components["modelName"],
             "normalizer": metadata["normalizer"],
             "normalizerUpdatePolicy": self.plan.normalizerUpdatePolicy,
-            "trainingStrategy": self.plan.trainingStrategy.name,
+            "trainingStrategy": metadata["trainingStrategy"],
+            "warmup": int(self.plan.warmup),
+            "isWarmup": int(instanceId < int(self.plan.warmup)),
             "runSeed": int(metadata["runSeed"]),
             "rawScore": float(rawScore),
         }

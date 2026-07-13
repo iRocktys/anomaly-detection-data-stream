@@ -19,6 +19,7 @@ class ScorePlot(PlotBase):
     scoreColors = ["#5f86ad", "#f0a43a", "#6f2dbd", "#2a9d8f"]
     thresholdColors = ["#b71c1c", "#d32f2f", "#e53935", "#8e0000"]
     thresholdStyles = ["-", "--", "-.", ":"]
+    warmupColor = "#c7c7c7"
     attackColors = [
         "#f3aaaa",
         "#abc7ef",
@@ -56,6 +57,10 @@ class ScorePlot(PlotBase):
         attackAlpha=0.30,
         showAttackLabels=False,
         attackLegendColumns=4,
+        showWarmup=True,
+        warmupColumn="isWarmup",
+        warmupSizeColumn="warmup",
+        warmupAlpha=0.20,
         legendColumns=None,
         dpi=160,
     ):
@@ -82,6 +87,15 @@ class ScorePlot(PlotBase):
         attackColorMap = self.buildAttackColorMap(attackRegions)
 
         fig, ax = plt.subplots(figsize=(18, 7.5))
+        warmupHandle = self.addWarmupRegion(
+            ax=ax,
+            frame=frame,
+            xValues=xValues,
+            showWarmup=showWarmup,
+            warmupColumn=warmupColumn,
+            warmupSizeColumn=warmupSizeColumn,
+            alpha=warmupAlpha,
+        )
         self.addNamedAttackRegions(
             ax=ax,
             regions=attackRegions,
@@ -179,7 +193,8 @@ class ScorePlot(PlotBase):
             for attackName, color in attackColorMap.items()
         ]
 
-        legendHandles = seriesHandles + attackHandles
+        warmupHandles = [warmupHandle] if warmupHandle is not None else []
+        legendHandles = seriesHandles + warmupHandles + attackHandles
         if legendHandles:
             if legendColumns is None:
                 resolvedLegendColumns = min(7, len(legendHandles))
@@ -244,25 +259,11 @@ class ScorePlot(PlotBase):
         if readyColumn and readyColumn in frame.columns:
             readyMask = frame[readyColumn].fillna(False).astype(bool).to_numpy()
 
-        if readyMask is not None and np.any(~readyMask):
-            warmupValues = thresholdValues.copy()
-            warmupValues[readyMask] = np.nan
-            if np.any(np.isfinite(warmupValues)):
-                ax.plot(
-                    xValues,
-                    warmupValues,
-                    color=color,
-                    linewidth=1.35,
-                    linestyle="--",
-                    alpha=0.38,
-                    zorder=7,
-                )
-
         visibleValues = thresholdValues.copy()
         if readyMask is not None:
             visibleValues[~readyMask] = np.nan
-            if not np.any(np.isfinite(visibleValues)):
-                visibleValues = thresholdValues
+        if not np.any(np.isfinite(visibleValues)):
+            return None
 
         line, = ax.plot(
             xValues,
@@ -275,6 +276,73 @@ class ScorePlot(PlotBase):
             zorder=9,
         )
         return line
+
+    def addWarmupRegion(
+        self,
+        ax,
+        frame,
+        xValues,
+        showWarmup,
+        warmupColumn,
+        warmupSizeColumn,
+        alpha,
+    ):
+        if not showWarmup or len(frame) == 0:
+            return None
+        warmupMask = self.resolveWarmupMask(
+            frame,
+            warmupColumn=warmupColumn,
+            warmupSizeColumn=warmupSizeColumn,
+        )
+        positions = np.flatnonzero(warmupMask)
+        if positions.size == 0:
+            return None
+
+        start = self.regionStart(xValues, int(positions[0]))
+        end = self.regionEnd(xValues, int(positions[-1]))
+        ax.axvspan(
+            start,
+            end,
+            facecolor=self.warmupColor,
+            edgecolor=self.warmupColor,
+            linewidth=0.8,
+            alpha=float(alpha),
+            zorder=0.5,
+        )
+        ax.axvline(
+            end,
+            color="#8a8a8a",
+            linewidth=0.9,
+            linestyle=":",
+            alpha=0.65,
+            zorder=3,
+        )
+        return mpatches.Patch(
+            facecolor=self.warmupColor,
+            edgecolor="#8a8a8a",
+            alpha=min(0.85, float(alpha) + 0.35),
+            label="Período de aquecimento",
+        )
+
+    @staticmethod
+    def resolveWarmupMask(frame, warmupColumn, warmupSizeColumn):
+        if warmupColumn in frame.columns:
+            values = pd.to_numeric(frame[warmupColumn], errors="coerce").fillna(0)
+            return values.astype(int).to_numpy() == 1
+
+        if warmupSizeColumn in frame.columns:
+            sizes = (
+                pd.to_numeric(frame[warmupSizeColumn], errors="coerce")
+                .dropna()
+                .astype(int)
+                .unique()
+            )
+            if len(sizes) == 1 and int(sizes[0]) > 0:
+                mask = np.zeros(len(frame), dtype=bool)
+                mask[: min(int(sizes[0]), len(frame))] = True
+                return mask
+
+        return np.zeros(len(frame), dtype=bool)
 
     def buildNamedAttackRegions(
         self,
@@ -452,10 +520,6 @@ class ScorePlot(PlotBase):
             return "Limiar"
         strategy = strategies[0]
         names = {
-            "fixed": "Limiar fixo",
-            "incrementalMeanStd": "Limiar média/desvio incremental",
-            "incrementalmeanstd": "Limiar média/desvio incremental",
-            "spot": "Limiar SPOT",
             "dspot": "Limiar DSPOT",
         }
         return names.get(strategy, f"Limiar {strategy}")

@@ -19,9 +19,19 @@ class ExperimentBuilder:
             "trainingStrategy": ComponentRegistry.create("training", plan.trainingStrategy),
         }
 
-    def buildEvaluationComponents(self, evaluationConfig):
+    def buildEvaluationComponents(self, evaluationConfig, warmup):
         return {
-            "scoreSmoother": ComponentRegistry.create("scoreSmoother", evaluationConfig.scoreSmoother),
-            "threshold": ComponentRegistry.create("threshold", evaluationConfig.threshold),
-            "decision": ComponentRegistry.create("decision", evaluationConfig.decisionStrategy),
+            "scoreSmoother": ComponentRegistry.create(
+                "scoreSmoother",
+                evaluationConfig.scoreSmoother,
+            ),
+            "threshold": ComponentRegistry.create(
+                "threshold",
+                evaluationConfig.threshold,
+                injectedParameters={"warmup": int(warmup)},
+            ),
+            "decision": ComponentRegistry.create(
+                "decision",
+                evaluationConfig.decisionStrategy,
+            ),
         }

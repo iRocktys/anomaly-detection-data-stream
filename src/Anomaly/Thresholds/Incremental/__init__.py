@@ -1,3 +1,1 @@
 from src.Anomaly.Thresholds.Incremental.DspotThreshold import DspotThreshold
-from src.Anomaly.Thresholds.Incremental.IncrementalMeanStdThreshold import IncrementalMeanStdThreshold
-from src.Anomaly.Thresholds.Incremental.SpotThreshold import SpotThreshold

@@ -2,6 +2,8 @@ from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
+from src.Anomaly.Thresholds.ThresholdRegistry import ThresholdRegistry
+
 
 @dataclass(frozen=True)
 class ComponentConfig:
@@ -89,6 +91,7 @@ class ThresholdEvaluationConfig:
         if not str(self.name).strip():
             raise ValueError("ThresholdEvaluationConfig.name não pode ser vazio.")
         self.threshold.validate("ThresholdEvaluationConfig.threshold")
+        ThresholdRegistry.validateConfig(self.threshold)
         self.scoreSmoother.validate("ThresholdEvaluationConfig.scoreSmoother")
         self.decisionStrategy.validate("ThresholdEvaluationConfig.decisionStrategy")
         if not str(self.scoreColumn).strip():
@@ -142,12 +145,74 @@ class ExperimentPlan:
     featureSmoother: ComponentConfig = field(default_factory=lambda: ComponentConfig("none"))
     trainingStrategy: ComponentConfig = field(default_factory=lambda: ComponentConfig("all"))
     normalizerUpdatePolicy: str = "all"
+    warmup: int = 200
     movingAverageWindows: list[int] = field(default_factory=lambda: [3, 5, 10, 50, 100])
     runSeeds: list[int] = field(default_factory=lambda: [1])
     output: OutputConfig = field(default_factory=OutputConfig)
 
+    trainingAliases = {
+        "all": "all",
+        "trainall": "all",
+        "predictednormal": "predictedNormal",
+        "normalprediction": "predictedNormal",
+        "predictednormalonly": "predictedNormal",
+    }
+
     def withChanges(self, **changes):
         return replace(self, **changes)
+
+    @staticmethod
+    def normalizeComponentName(name):
+        return "".join(
+            character
+            for character in str(name or "").lower()
+            if character.isalnum()
+        )
+
+    def resolvedTrainingName(self):
+        normalizedName = self.normalizeComponentName(self.trainingStrategy.name)
+        if normalizedName not in self.trainingAliases:
+            available = "all, predictedNormal"
+            raise ValueError(
+                f"Estratégia de treinamento desconhecida: {self.trainingStrategy.name}. "
+                f"Disponíveis: {available}."
+            )
+        return self.trainingAliases[normalizedName]
+
+    def trainingRequiresPrediction(self):
+        return self.resolvedTrainingName() == "predictedNormal"
+
+    def resolveTrainingEvaluation(self):
+        if not self.trainingRequiresPrediction():
+            return None
+        if not self.thresholdEvaluations:
+            raise ValueError(
+                "O treinamento predictedNormal requer ao menos uma avaliação de threshold."
+            )
+
+        requestedName = self.trainingStrategy.parameters.get("evaluationName")
+        if requestedName is not None:
+            matches = [
+                evaluation
+                for evaluation in self.thresholdEvaluations
+                if str(evaluation.name) == str(requestedName)
+            ]
+            if not matches:
+                available = ", ".join(
+                    evaluation.name for evaluation in self.thresholdEvaluations
+                )
+                raise ValueError(
+                    f"Avaliação de treinamento não encontrada: {requestedName}. "
+                    f"Disponíveis: {available}."
+                )
+            return matches[0]
+
+        if len(self.thresholdEvaluations) != 1:
+            raise ValueError(
+                "Com múltiplas avaliações, predictedNormal requer o parâmetro "
+                "evaluationName para indicar qual threshold controla o treinamento."
+            )
+        return self.thresholdEvaluations[0]
 
     def validate(self):
         if not self.datasets:
@@ -158,6 +223,8 @@ class ExperimentPlan:
             raise ValueError("ExperimentPlan.normalizers deve possuir ao menos um normalizador.")
         if not self.runSeeds:
             raise ValueError("ExperimentPlan.runSeeds deve possuir ao menos uma seed.")
+        if int(self.warmup) < 20:
+            raise ValueError("ExperimentPlan.warmup deve ser maior ou igual a 20.")
         if self.normalizerUpdatePolicy not in {"all", "oracleNormal", "none"}:
             raise ValueError(
                 "normalizerUpdatePolicy deve ser all, oracleNormal ou none. "
@@ -174,14 +241,20 @@ class ExperimentPlan:
         self.featureExtractor.validate("featureExtractor")
         self.featureSmoother.validate("featureSmoother")
         self.trainingStrategy.validate("trainingStrategy")
+        self.resolvedTrainingName()
+        if self.trainingRequiresPrediction():
+            self.resolveTrainingEvaluation()
         self.output.validate()
         if any(int(window) < 1 for window in self.movingAverageWindows):
             raise ValueError("movingAverageWindows aceita somente valores maiores que zero.")
 
     def scorePlan(self):
+        if self.trainingRequiresPrediction():
+            return self
         return replace(self, thresholdEvaluations=[])
 
     def toDict(self):
+        feedbackEvaluation = self.resolveTrainingEvaluation()
         return {
             "datasets": [dataset.toDict() for dataset in self.datasets],
             "models": [model.toDict() for model in self.models],
@@ -190,12 +263,15 @@ class ExperimentPlan:
             "featureExtractor": self.featureExtractor.toDict(),
             "featureSmoother": self.featureSmoother.toDict(),
             "trainingStrategy": self.trainingStrategy.toDict(),
+            "trainingFeedbackEvaluation": (
+                feedbackEvaluation.name if feedbackEvaluation is not None else None
+            ),
             "normalizerUpdatePolicy": self.normalizerUpdatePolicy,
+            "warmup": int(self.warmup),
             "movingAverageWindows": [int(window) for window in self.movingAverageWindows],
             "runSeeds": [int(seed) for seed in self.runSeeds],
             "output": self.output.toDict(),
         }
 
 
-# Alias temporário para imports antigos. Novos experimentos devem usar ExperimentPlan.
 ExperimentConfig = ExperimentPlan

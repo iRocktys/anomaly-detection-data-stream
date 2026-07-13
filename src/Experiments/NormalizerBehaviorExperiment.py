@@ -12,6 +12,7 @@ def buildExperiment(
     modelParameters=None,
     rollingWindow=200,
     runSeeds=None,
+    warmup=200,
 ):
     experiment = JupyterExperiment(
         datasetPath=datasetPath,
@@ -19,6 +20,7 @@ def buildExperiment(
         datasetName=datasetName,
         outputDirectory=outputDirectory,
         runSeeds=runSeeds or [1],
+        warmup=warmup,
         saveNormalizedFeatures=True,
         printSummary=True,
     )
@@ -32,9 +34,9 @@ def buildExperiment(
     experiment.addNormalizer("rollingMinMax", {"windowSize": rollingWindow})
     experiment.addNormalizer("rollingZScore", {"windowSize": rollingWindow})
     experiment.addThresholdEvaluation(
-        name="fixed-050",
-        thresholdName="fixed",
-        thresholdParameters={"value": 0.5},
+        name="dspot",
+        thresholdName="dspot",
+        thresholdParameters={},
     )
     return experiment
 
@@ -53,6 +55,7 @@ def parseArguments():
     parser.add_argument("--output", default="output/ExpNormalizers")
     parser.add_argument("--models", default="AIF,HST")
     parser.add_argument("--rollingWindow", type=int, default=200)
+    parser.add_argument("--warmup", type=int, default=200)
     return parser.parse_args()
 
 
@@ -65,6 +68,7 @@ def main():
         outputDirectory=arguments.output,
         modelCodes=[value.strip().upper() for value in arguments.models.split(",") if value.strip()],
         rollingWindow=arguments.rollingWindow,
+        warmup=arguments.warmup,
     )
     print(result.summary())
 

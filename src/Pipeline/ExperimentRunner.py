@@ -54,6 +54,7 @@ class ExperimentRunner:
 
     def generateScores(self, manager, result, plan=None):
         activePlan = plan or self.plan
+        feedbackEvaluation = activePlan.resolveTrainingEvaluation()
         artifacts = []
         for datasetConfig in activePlan.datasets:
             dataFrame = pd.read_csv(datasetConfig.resolvedPath())
@@ -68,6 +69,13 @@ class ExperimentRunner:
                             normalizerConfig=normalizerConfig,
                             runSeed=runSeed,
                         )
+                        if feedbackEvaluation is not None:
+                            components["feedbackEvaluation"] = feedbackEvaluation
+                            components["feedbackComponents"] = self.builder.buildEvaluationComponents(
+                                feedbackEvaluation,
+                                warmup=activePlan.warmup,
+                            )
+
                         configurationHash = ResultManager.configurationHash({
                             "dataset": datasetConfig.toDict(),
                             "model": modelConfig.toDict(),
@@ -75,7 +83,13 @@ class ExperimentRunner:
                             "featureExtractor": activePlan.featureExtractor.toDict(),
                             "featureSmoother": activePlan.featureSmoother.toDict(),
                             "trainingStrategy": activePlan.trainingStrategy.toDict(),
+                            "trainingFeedbackEvaluation": (
+                                feedbackEvaluation.toDict()
+                                if feedbackEvaluation is not None
+                                else None
+                            ),
                             "normalizerUpdatePolicy": activePlan.normalizerUpdatePolicy,
+                            "warmup": int(activePlan.warmup),
                             "runSeed": int(runSeed),
                         })
                         artifactId = ResultManager.buildArtifactId(
@@ -97,6 +111,14 @@ class ExperimentRunner:
                             "modelParameters": components["modelParameters"],
                             "normalizer": normalizerConfig.name,
                             "normalizerParameters": dict(normalizerConfig.parameters),
+                            "trainingStrategy": activePlan.resolvedTrainingName(),
+                            "trainingParameters": dict(activePlan.trainingStrategy.parameters),
+                            "trainingFeedbackEvaluation": (
+                                feedbackEvaluation.name
+                                if feedbackEvaluation is not None
+                                else None
+                            ),
+                            "warmup": int(activePlan.warmup),
                             "runSeed": int(runSeed),
                         }
                         self.printScoreSummary(activePlan, metadata)
@@ -134,12 +156,17 @@ class ExperimentRunner:
                 evaluationFrame, summary, windowMetrics = self.evaluator.evaluateFrame(
                     scoreFrame,
                     evaluationConfig,
+                    warmup=self.plan.warmup,
                     evaluationId=evaluationId,
                 )
                 metadata = {
                     "sourceScorePath": str(scoreArtifact["path"]),
                     "sourceScoreArtifactId": scoreArtifact["artifactId"],
                     "evaluation": evaluationConfig.toDict(),
+                    "trainingStrategy": scoreArtifact["metadata"].get("trainingStrategy"),
+                    "trainingFeedbackEvaluation": scoreArtifact["metadata"].get(
+                        "trainingFeedbackEvaluation"
+                    ),
                 }
                 manager.saveEvaluation(
                     evaluationFrame,
@@ -151,6 +178,10 @@ class ExperimentRunner:
                     "runId": manager.runId,
                     "sourceScorePath": str(scoreArtifact["path"]),
                     "sourceScoreArtifactId": scoreArtifact["artifactId"],
+                    "trainingStrategy": scoreArtifact["metadata"].get("trainingStrategy"),
+                    "trainingFeedbackEvaluation": scoreArtifact["metadata"].get(
+                        "trainingFeedbackEvaluation"
+                    ),
                 })
                 manager.saveMetrics(
                     summary,
@@ -198,15 +229,30 @@ class ExperimentRunner:
         metadata = {
             "external": True,
             "sourcePath": str(path),
+            "trainingStrategy": (
+                str(frame.iloc[0]["trainingStrategy"])
+                if not frame.empty and "trainingStrategy" in frame.columns
+                else None
+            ),
+            "trainingFeedbackEvaluation": (
+                str(frame.iloc[0]["trainingFeedbackEvaluation"])
+                if not frame.empty
+                and "trainingFeedbackEvaluation" in frame.columns
+                and pd.notna(frame.iloc[0]["trainingFeedbackEvaluation"])
+                else None
+            ),
         }
         return {"path": str(path), "artifactId": artifactId, "metadata": metadata}
 
     def printScoreSummary(self, plan, metadata):
         if not plan.output.printSummary:
             return
+        feedback = metadata.get("trainingFeedbackEvaluation")
+        feedbackText = f" feedback={feedback}" if feedback else ""
         print(
             f"[scores] dataset={metadata['dataset']} model={metadata['modelConfig']} "
-            f"normalizer={metadata['normalizer']} seed={metadata['runSeed']}"
+            f"normalizer={metadata['normalizer']} seed={metadata['runSeed']} "
+            f"training={metadata['trainingStrategy']}{feedbackText}"
         )
 
     def printEvaluationSummary(self, scoreArtifact, evaluationConfig):

@@ -1,9 +1,6 @@
 import re
 
-from src.Anomaly.Thresholds.FixedThreshold import FixedThreshold
-from src.Anomaly.Thresholds.Incremental.DspotThreshold import DspotThreshold
-from src.Anomaly.Thresholds.Incremental.IncrementalMeanStdThreshold import IncrementalMeanStdThreshold
-from src.Anomaly.Thresholds.Incremental.SpotThreshold import SpotThreshold
+from src.Anomaly.Thresholds.ThresholdRegistry import ThresholdRegistry
 from src.Data.OnlineNormalizers import (
     IncrementalMinMaxNormalizer,
     IncrementalZScoreNormalizer,
@@ -14,8 +11,15 @@ from src.Data.OnlineNormalizers import (
 from src.Features.FeatureExtractors import NoFeatureExtractor
 from src.Features.FeatureSmoothers import MovingAverageFeatureSmoother, NoFeatureSmoother
 from src.Pipeline.DecisionComponents import ThresholdDecisionStrategy
-from src.Scores.ScoreSmoothers import ExponentialScoreSmoother, MovingAverageScoreSmoother, NoScoreSmoother
-from src.Training.TrainingStrategies import NoTrainingStrategy, TrainAllStrategy, TrainOracleNormalStrategy
+from src.Scores.ScoreSmoothers import (
+    ExponentialScoreSmoother,
+    MovingAverageScoreSmoother,
+    NoScoreSmoother,
+)
+from src.Training.TrainingStrategies import (
+    TrainAllStrategy,
+    TrainPredictedNormalStrategy,
+)
 
 
 class ComponentRegistry:
@@ -42,21 +46,16 @@ class ComponentRegistry:
             "exponential": ExponentialScoreSmoother,
             "ewma": ExponentialScoreSmoother,
         },
-        "threshold": {
-            "fixed": FixedThreshold,
-            "incrementalmeanstd": IncrementalMeanStdThreshold,
-            "spot": SpotThreshold,
-            "dspot": DspotThreshold,
-        },
         "decision": {
             "threshold": ThresholdDecisionStrategy,
             "binary": ThresholdDecisionStrategy,
         },
         "training": {
             "all": TrainAllStrategy,
-            "oraclenormal": TrainOracleNormalStrategy,
-            "normalonly": TrainOracleNormalStrategy,
-            "none": NoTrainingStrategy,
+            "trainall": TrainAllStrategy,
+            "predictednormal": TrainPredictedNormalStrategy,
+            "normalprediction": TrainPredictedNormalStrategy,
+            "predictednormalonly": TrainPredictedNormalStrategy,
         },
     }
 
@@ -65,7 +64,15 @@ class ComponentRegistry:
         return re.sub(r"[^a-z0-9]", "", str(name or "").lower())
 
     @classmethod
-    def create(cls, category, config):
+    def create(cls, category, config, injectedParameters=None):
+        if category == "threshold":
+            injected = dict(injectedParameters or {})
+            if "warmup" not in injected:
+                raise ValueError(
+                    "A criação de threshold requer o warmup global do experimento."
+                )
+            return ThresholdRegistry.create(config, globalWarmup=injected["warmup"])
+
         if category not in cls.builders:
             raise ValueError(f"Categoria de componente desconhecida: {category}.")
         normalizedName = cls.normalizeName(config.name)
@@ -76,6 +83,7 @@ class ComponentRegistry:
                 f"Componente desconhecido em {category}: {config.name}. Disponíveis: {available}."
             )
         parameters = cls.normalizeParameters(category, normalizedName, config.parameters)
+        parameters.update(dict(injectedParameters or {}))
         try:
             return builder(**parameters)
         except TypeError as error:
@@ -92,7 +100,9 @@ class ComponentRegistry:
 
     @classmethod
     def describe(cls):
-        return {
+        result = {
             category: sorted(builders.keys())
             for category, builders in cls.builders.items()
         }
+        result["threshold"] = sorted(ThresholdRegistry.definitions.keys())
+        return result

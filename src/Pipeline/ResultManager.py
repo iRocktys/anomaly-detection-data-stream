@@ -52,7 +52,7 @@ class ResultManager:
             directory.mkdir(parents=True, exist_ok=True)
         self.manifestPath = self.runDirectory / "manifest.json"
         self.manifest = {
-            "schemaVersion": "2.0",
+            "schemaVersion": "3.0",
             "runId": self.runId,
             "mode": self.mode,
             "status": "running",
