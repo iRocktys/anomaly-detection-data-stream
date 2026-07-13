@@ -8,11 +8,5 @@ class NoFeatureExtractor:
     def update(self, values):
         return None
 
-
-class FeatureExtractors:
-    @staticmethod
-    def createExtractor(config):
-        extractorName = str(config.name).strip().lower()
-        if extractorName == "none":
-            return NoFeatureExtractor()
-        raise ValueError(f"Extrator de features desconhecido: {config.name}")
+    def reset(self):
+        return None

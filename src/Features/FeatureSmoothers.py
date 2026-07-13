@@ -10,11 +10,14 @@ class NoFeatureSmoother:
     def update(self, values):
         return None
 
+    def reset(self):
+        return None
+
 
 class MovingAverageFeatureSmoother:
     def __init__(self, windowSize=5):
         self.windowSize = max(1, int(windowSize))
-        self.window = deque(maxlen=self.windowSize)
+        self.reset()
 
     def transform(self, values):
         cleanValues = np.asarray(values, dtype=np.float64)
@@ -26,13 +29,5 @@ class MovingAverageFeatureSmoother:
     def update(self, values):
         self.window.append(np.asarray(values, dtype=np.float64).copy())
 
-
-class FeatureSmoothers:
-    @staticmethod
-    def createSmoother(config):
-        smootherName = str(config.name).strip().lower()
-        if smootherName == "none":
-            return NoFeatureSmoother()
-        if smootherName in {"movingaverage", "mean"}:
-            return MovingAverageFeatureSmoother(**config.parameters)
-        raise ValueError(f"Suavizador de features desconhecido: {config.name}")
+    def reset(self):
+        self.window = deque(maxlen=self.windowSize)

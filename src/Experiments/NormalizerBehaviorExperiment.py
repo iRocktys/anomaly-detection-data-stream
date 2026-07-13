@@ -1,74 +1,72 @@
 import argparse
 
-from src.Pipeline.ExperimentConfig import ComponentConfig, ExperimentConfig
-from src.Pipeline.ExperimentRunner import ExperimentRunner
+from src.Experiments.JupyterNormalizerExperiment import JupyterExperiment
 
 
-def buildExperiment(datasetPath, selectedFeatures, datasetName="Adaptacao", outputDirectory="output/ExpNormalizers", modelCodes=None, rollingWindow=200):
-    return ExperimentConfig(
+def buildExperiment(
+    datasetPath,
+    selectedFeatures,
+    datasetName="Adaptacao",
+    outputDirectory="output/ExpNormalizers",
+    modelCodes=None,
+    modelParameters=None,
+    rollingWindow=200,
+    runSeeds=None,
+):
+    experiment = JupyterExperiment(
         datasetPath=datasetPath,
+        selectedFeatures=selectedFeatures,
         datasetName=datasetName,
         outputDirectory=outputDirectory,
-        selectedFeatures=selectedFeatures,
-        modelCodes=modelCodes or ["AIF", "HST"],
-        normalizers=[
-            ComponentConfig("none"),
-            ComponentConfig("incrementalMinMax"),
-            ComponentConfig("incrementalZScore"),
-            ComponentConfig("rollingMinMax", {"windowSize": rollingWindow}),
-            ComponentConfig("rollingZScore", {"windowSize": rollingWindow}),
-        ],
-        featureSelector=ComponentConfig("selected"),
-        featureExtractor=ComponentConfig("none"),
-        featureSmoother=ComponentConfig("none"),
-        scoreSmoother=ComponentConfig("none"),
-        thresholdStrategy=ComponentConfig("fixed", {"value": 0.5}),
-        decisionStrategy=ComponentConfig("threshold"),
-        trainingStrategy=ComponentConfig("all"),
-        normalizerUpdatePolicy="all",
+        runSeeds=runSeeds or [1],
         saveNormalizedFeatures=True,
         printSummary=True,
     )
-
-
-def runExperiment(datasetPath, selectedFeatures, datasetName="Adaptacao", outputDirectory="output/ExpNormalizers", modelCodes=None, rollingWindow=200):
-    experimentConfig = buildExperiment(
-        datasetPath=datasetPath,
-        selectedFeatures=selectedFeatures,
-        datasetName=datasetName,
-        outputDirectory=outputDirectory,
-        modelCodes=modelCodes,
-        rollingWindow=rollingWindow,
+    resolvedParameters = dict(modelParameters or {})
+    for modelCode in modelCodes or ["AIF", "HST"]:
+        code = str(modelCode).strip().upper()
+        experiment.addModel(code, resolvedParameters.get(code, {}))
+    experiment.addNormalizer("none")
+    experiment.addNormalizer("incrementalMinMax")
+    experiment.addNormalizer("incrementalZScore")
+    experiment.addNormalizer("rollingMinMax", {"windowSize": rollingWindow})
+    experiment.addNormalizer("rollingZScore", {"windowSize": rollingWindow})
+    experiment.addThresholdEvaluation(
+        name="fixed-050",
+        thresholdName="fixed",
+        thresholdParameters={"value": 0.5},
     )
-    return ExperimentRunner(experimentConfig).runExperiment()
+    return experiment
+
+
+def runExperiment(**options):
+    return buildExperiment(**options).run()
 
 
 def parseArguments():
-    parser = argparse.ArgumentParser(description="Executa o experimento com os cinco tipos de normalização online.")
-    parser.add_argument("--dataset", required=True, help="Caminho do arquivo CSV.")
-    parser.add_argument("--features", required=True, help="Features separadas por vírgula.")
+    parser = argparse.ArgumentParser(
+        description="Preset reprodutível para comparar os cinco normalizadores online."
+    )
+    parser.add_argument("--dataset", required=True)
+    parser.add_argument("--features", required=True)
     parser.add_argument("--datasetName", default="Adaptacao")
     parser.add_argument("--output", default="output/ExpNormalizers")
-    parser.add_argument("--models", default="AIF,HST", help="Modelos separados por vírgula.")
+    parser.add_argument("--models", default="AIF,HST")
     parser.add_argument("--rollingWindow", type=int, default=200)
     return parser.parse_args()
 
 
 def main():
     arguments = parseArguments()
-    selectedFeatures = [feature.strip() for feature in arguments.features.split(",") if feature.strip()]
-    modelCodes = [model.strip().upper() for model in arguments.models.split(",") if model.strip()]
-    generatedFiles = runExperiment(
+    result = runExperiment(
         datasetPath=arguments.dataset,
-        selectedFeatures=selectedFeatures,
+        selectedFeatures=[value.strip() for value in arguments.features.split(",") if value.strip()],
         datasetName=arguments.datasetName,
         outputDirectory=arguments.output,
-        modelCodes=modelCodes,
+        modelCodes=[value.strip().upper() for value in arguments.models.split(",") if value.strip()],
         rollingWindow=arguments.rollingWindow,
     )
-    print("\nArquivos gerados:")
-    for generatedFile in generatedFiles:
-        print(generatedFile)
+    print(result.summary())
 
 
 if __name__ == "__main__":

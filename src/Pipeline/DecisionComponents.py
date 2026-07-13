@@ -7,11 +7,5 @@ class ThresholdDecisionStrategy:
     def update(self, score, threshold, prediction, trueLabel=None):
         return None
 
-
-class DecisionComponents:
-    @staticmethod
-    def createStrategy(config):
-        strategyName = str(config.name).strip().lower()
-        if strategyName in {"threshold", "binary"}:
-            return ThresholdDecisionStrategy()
-        raise ValueError(f"Estratégia de decisão desconhecida: {config.name}")
+    def reset(self):
+        return None

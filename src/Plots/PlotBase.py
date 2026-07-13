@@ -1,4 +1,3 @@
-import os
 import re
 
 import matplotlib.patches as mpatches
@@ -179,21 +178,3 @@ class PlotBase:
             patch.set_edgecolor("gray")
             patch.set_linewidth(1.0)
             patch.set_alpha(0.8)
-
-    def resolve_output_dir(
-        self,
-        algo_name,
-        discretization_strategy,
-        scenario_name,
-    ):
-        output_dir = os.path.join(
-            "output",
-            algo_name,
-            discretization_strategy,
-            "Plots",
-            f"{algo_name}_{scenario_name}",
-        )
-
-        os.makedirs(output_dir, exist_ok=True)
-
-        return output_dir

@@ -1,149 +1,111 @@
 from collections import deque
 
 import numpy as np
-from capymoa.instance import LabeledInstance
 
 
 class StreamPipeline:
-    def __init__(self, config, components, featureNames):
-        self.config = config
+    """Gera scores causais. Thresholds e decisões não pertencem a esta etapa."""
+
+    def __init__(self, plan, datasetConfig, components, featureNames):
+        self.plan = plan
+        self.datasetConfig = datasetConfig
         self.components = components
         self.featureNames = list(featureNames)
-        self.scoreHistory = deque(maxlen=max(config.movingAverageWindows or [1]))
+        maximumWindow = max(plan.movingAverageWindows or [1])
+        self.scoreHistory = deque(maxlen=maximumWindow)
 
-    def run(self, stream, runId, modelCode, normalizerName):
+    def run(self, stream, metadata):
         stream.restart()
         rows = []
         instanceId = 0
-
         while stream.has_more_instances():
             rawInstance = stream.next_instance()
-            row = self.processInstance(
-                rawInstance=rawInstance,
-                runId=runId,
-                instanceId=instanceId,
-                modelCode=modelCode,
-                normalizerName=normalizerName,
-            )
-            rows.append(row)
+            rows.append(self.processInstance(rawInstance, instanceId, metadata))
             instanceId += 1
-
         return rows
 
-    def processInstance(self, rawInstance, runId, instanceId, modelCode, normalizerName):
+    def processInstance(self, rawInstance, instanceId, metadata):
         rawValues = np.asarray(rawInstance.x, dtype=np.float64)
-        selectedValues = self.components["featureSelector"].transform(rawValues)
-        extractedValues = self.components["featureExtractor"].transform(selectedValues)
+        extractedValues = self.components["featureExtractor"].transform(rawValues)
         normalizedValues = self.components["normalizer"].transform(extractedValues)
         smoothedValues = self.components["featureSmoother"].transform(normalizedValues)
         modelInstance = self.createInstance(rawInstance, smoothedValues)
 
         rawScore = float(self.components["model"].score_instance(modelInstance))
-        smoothScore = float(self.components["scoreSmoother"].transform(rawScore))
-        thresholdValue = float(self.components["thresholdStrategy"].getThreshold())
-        thresholdReady = bool(self.components["thresholdStrategy"].isReady())
-        prediction = int(self.components["decisionStrategy"].predict(
-            smoothScore,
-            thresholdValue,
-            thresholdReady,
-        ))
         trueLabel = int(rawInstance.y_index)
-        attackLabel = int(trueLabel != self.config.normalClassIndex)
+        isAttack = int(trueLabel != self.datasetConfig.normalClassIndex)
+        self.scoreHistory.append(rawScore)
 
-        self.scoreHistory.append(smoothScore)
         row = self.createRow(
-            runId=runId,
             instanceId=instanceId,
-            modelCode=modelCode,
-            normalizerName=normalizerName,
+            metadata=metadata,
             trueLabel=trueLabel,
-            attackLabel=attackLabel,
+            isAttack=isAttack,
             rawScore=rawScore,
-            smoothScore=smoothScore,
-            prediction=prediction,
-            thresholdValue=thresholdValue,
-            thresholdReady=thresholdReady,
             normalizedValues=normalizedValues,
         )
 
-        if self.components["trainingStrategy"].shouldTrain(prediction, trueLabel):
+        if self.components["trainingStrategy"].shouldTrain(trueLabel, isAttack):
             try:
                 self.components["model"].train(modelInstance)
             except ValueError:
                 pass
 
-        self.updateComponents(
-            rawValues=rawValues,
-            selectedValues=selectedValues,
-            extractedValues=extractedValues,
-            normalizedValues=normalizedValues,
-            rawScore=rawScore,
-            smoothScore=smoothScore,
-            attackLabel=attackLabel,
-            trueLabel=trueLabel,
-            prediction=prediction,
-            thresholdValue=thresholdValue,
-        )
+        self.components["featureExtractor"].update(rawValues)
+        if self.shouldUpdateNormalizer(isAttack):
+            self.components["normalizer"].update(extractedValues)
+        self.components["featureSmoother"].update(normalizedValues)
         return row
 
-    def updateComponents(self, rawValues, selectedValues, extractedValues, normalizedValues, rawScore, smoothScore, attackLabel, trueLabel, prediction, thresholdValue):
-        self.components["featureSelector"].update(rawValues)
-        self.components["featureExtractor"].update(selectedValues)
-
-        if self.shouldUpdateNormalizer(attackLabel):
-            self.components["normalizer"].update(extractedValues)
-
-        self.components["featureSmoother"].update(normalizedValues)
-        self.components["scoreSmoother"].update(rawScore)
-        self.components["decisionStrategy"].update(
-            smoothScore,
-            thresholdValue,
-            prediction,
-            trueLabel,
-        )
-        self.components["thresholdStrategy"].update(smoothScore)
-
-    def shouldUpdateNormalizer(self, attackLabel):
-        policyName = self.config.normalizerUpdatePolicy
-        if policyName == "none":
+    def shouldUpdateNormalizer(self, isAttack):
+        policy = self.plan.normalizerUpdatePolicy
+        if policy == "none":
             return False
-        if policyName == "all":
+        if policy == "all":
             return True
-        return attackLabel == 0
+        return int(isAttack) == 0
 
     def createInstance(self, rawInstance, values):
+        try:
+            from capymoa.instance import LabeledInstance
+        except ImportError as error:
+            raise ImportError("CapyMOA é necessário para executar o StreamPipeline.") from error
         return LabeledInstance.from_array(
             schema=rawInstance.schema,
             x=np.asarray(values, dtype=np.float64),
             y_index=int(rawInstance.y_index),
         )
 
-    def createRow(self, runId, instanceId, modelCode, normalizerName, trueLabel, attackLabel, rawScore, smoothScore, prediction, thresholdValue, thresholdReady, normalizedValues):
+    def createRow(self, instanceId, metadata, trueLabel, isAttack, rawScore, normalizedValues):
+        targetNames = metadata.get("targetNames", [])
+        labelName = (
+            str(targetNames[trueLabel])
+            if 0 <= int(trueLabel) < len(targetNames)
+            else str(trueLabel)
+        )
         row = {
-            "runId": runId,
-            "dataset": self.config.datasetName,
-            "instanceId": instanceId,
-            "trueLabel": trueLabel,
-            "isAttack": attackLabel,
-            "modelCode": modelCode,
+            "runId": metadata["runId"],
+            "scoreArtifactId": metadata["scoreArtifactId"],
+            "dataset": self.datasetConfig.name,
+            "instanceId": int(instanceId),
+            "trueLabel": int(trueLabel),
+            "labelName": labelName,
+            "isAttack": int(isAttack),
+            "modelCode": metadata["modelCode"],
+            "modelConfig": metadata["modelConfig"],
             "modelName": self.components["modelName"],
-            "normalizer": normalizerName,
-            "normalizerUpdatePolicy": self.config.normalizerUpdatePolicy,
-            "trainingStrategy": self.config.trainingStrategy.name,
-            "rawScore": rawScore,
-            "score": smoothScore,
-            "prediction": prediction,
-            "thresholdStrategy": self.config.thresholdStrategy.name,
-            "threshold": thresholdValue,
-            "thresholdReady": thresholdReady,
+            "normalizer": metadata["normalizer"],
+            "normalizerUpdatePolicy": self.plan.normalizerUpdatePolicy,
+            "trainingStrategy": self.plan.trainingStrategy.name,
+            "runSeed": int(metadata["runSeed"]),
+            "rawScore": float(rawScore),
         }
-
         scoreValues = list(self.scoreHistory)
-        for windowSize in self.config.movingAverageWindows:
+        for windowSize in self.plan.movingAverageWindows:
             recentScores = scoreValues[-max(1, int(windowSize)):]
-            row[f"scoreMa{windowSize}"] = float(np.mean(recentScores))
+            row[f"scoreMa{int(windowSize)}"] = float(np.mean(recentScores))
 
-        if self.config.saveNormalizedFeatures:
+        if self.plan.output.saveNormalizedFeatures:
             for featureIndex, featureName in enumerate(self.featureNames):
                 if featureIndex < len(normalizedValues):
                     row[str(featureName)] = float(normalizedValues[featureIndex])
