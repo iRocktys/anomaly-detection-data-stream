@@ -1,193 +1,140 @@
-import pandas as pd
 import numpy as np
-from sklearn.preprocessing import LabelEncoder, MinMaxScaler, StandardScaler, RobustScaler
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.feature_selection import VarianceThreshold
+import pandas as pd
 from capymoa.stream import NumpyStream
 
+
 class DataStreamProcessor:
-    def __init__(self, logging=True, selected_features=None):
+    def __init__(self, logging=True, selected_features=None, removed_features=None):
         self.logging = logging
         self.selected_features = selected_features
+        self.removed_features = removed_features
 
     def _log(self, message):
         if self.logging:
             print(message)
 
-    def _remove_features(self, X, y, threshold_var=None, threshold_corr=None, top_n_features=None):
-        initial_count = X.shape[1]
-        self._log(f"\n--- Iniciando Processo de Seleção de Features (Total: {initial_count}) ---")
+    def _validate_dataframe(self, df, target_label_col):
+        if not isinstance(df, pd.DataFrame):
+            raise TypeError("O conjunto de dados deve ser um DataFrame do pandas.")
 
-        # remoção por variância 
-        if threshold_var is not None:
-            selector = VarianceThreshold(threshold=threshold_var)
-            selector.fit(X)
-            cols_var = X.columns[selector.get_support()]
-            removed_count = initial_count - len(cols_var)
-            X = X[cols_var]
-            self._log(f"Variância: {removed_count} features removidas. Restantes: {X.shape[1]}")
+        if target_label_col not in df.columns:
+            raise ValueError(f"A coluna de rótulo '{target_label_col}' não foi encontrada no dataset.")
+
+    def _select_features(self, df, target_label_col):
+        if self.selected_features is None:
+            return df.copy()
+
+        selected_features = [str(feature).strip() for feature in self.selected_features]
+        missing_features = [feature for feature in selected_features if feature not in df.columns]
+
+        if missing_features:
+            raise ValueError(f"As seguintes features selecionadas não foram encontradas: {missing_features}")
+
+        columns_to_keep = selected_features.copy()
+
+        if target_label_col not in columns_to_keep:
+            columns_to_keep.append(target_label_col)
+
+        return df[columns_to_keep].copy()
+
+    def _remove_features(self, df, target_label_col):
+        if self.removed_features is None:
+            return df
+
+        removed_features = [str(feature).strip() for feature in self.removed_features]
+        removed_features = [feature for feature in removed_features if feature != target_label_col]
+        existing_features = [feature for feature in removed_features if feature in df.columns]
+
+        return df.drop(columns=existing_features)
+
+    def _prepare_features(self, df, target_label_col):
+        features = df.drop(columns=[target_label_col])
+        features = features.apply(pd.to_numeric, errors="coerce")
+        features = features.replace([np.inf, -np.inf], np.nan)
+
+        if features.shape[1] == 0:
+            raise ValueError("Nenhuma feature permaneceu disponível após o processamento.")
+
+        return features
+
+    def _handle_missing_values(self, features, method="0"):
+        method = str(method).strip().lower()
+
+        if method in ["media", "média", "mean"]:
+            fill_values = features.mean()
+        elif method in ["mediana", "median"]:
+            fill_values = features.median()
+        elif method in ["moda", "mode"]:
+            modes = features.mode(dropna=True)
+            fill_values = modes.iloc[0] if not modes.empty else pd.Series(0.0, index=features.columns)
+        elif method in ["0", "zero"]:
+            fill_values = 0.0
         else:
-            self._log("Remoção de Variância: Pular.")
+            raise ValueError("Método inválido. Utilize 'media', 'mediana', 'moda' ou '0'.")
 
-        # remoção por correlação de pearson 
-        if threshold_corr is not None:
-            corr_matrix = X.corr().abs()
-            upper = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
-            to_drop = [column for column in upper.columns if any(upper[column] > threshold_corr)]
-            X = X.drop(columns=to_drop)
-            self._log(f"Correlação (>{threshold_corr}): {len(to_drop)} features redundantes removidas. Restantes: {X.shape[1]}")
-        else:
-            self._log("Remover Correlação: Pular.")
+        features = features.fillna(fill_values)
+        features = features.fillna(0.0)
 
-        # random forest importance
-        if top_n_features is not None:
-            if X.shape[1] > top_n_features:
-                rf = RandomForestClassifier(n_estimators=50, n_jobs=-1, random_state=42)
-                rf.fit(X, y)
-                importances = pd.Series(rf.feature_importances_, index=X.columns)
-                selected_feats = importances.nlargest(top_n_features).index.tolist()
-                X = X[selected_feats]
-                self._log(f"Random Forest: Top {top_n_features} selecionadas.")
-            else:
-                self._log("Random Forest: Ignorado (Features atuais <= Top N).")
-        else:
-            self._log("Random Forest: Pular.")
+        return features.astype(np.float64)
 
-        self._log(f"Features Finais ({X.shape[1]}) - {X.columns.tolist()}")
-        self._log("--- Fim do Processo de Seleção de Features ---\n")
+    def _prepare_original_labels(self, labels):
+        original_labels = labels.fillna("UNKNOWN").astype(str).str.strip()
+        original_labels = original_labels.replace("", "UNKNOWN")
 
-        return X
+        return original_labels
 
-    def _normalize_data(self, X, method=None): 
-        match method:
-            case "MinMaxScaler":
-                scaler = MinMaxScaler()
-            case "StandardScaler":
-                scaler = StandardScaler()
-            case "RobustScaler":
-                scaler = RobustScaler()
-            case _:
-                self._log("Normalização: Dados originais mantidos.")
-                return X.values if hasattr(X, 'values') else X
-
-        # aplica a transformação se encontrou um método válido
-        scaled_x = scaler.fit_transform(X)
-        self._log(f"Normalização: {method}")
-        return scaled_x
-
-    def _handle_missing_values(self, X, method='0'):
-        match str(method).lower():
-            case 'media':
-                self._log("Tratamento de Nulos: Preenchendo com a MÉDIA das colunas...")
-                return X.fillna(X.mean())
-            case 'mediana':
-                self._log("Tratamento de Nulos: Preenchendo com a MEDIANA das colunas...")
-                return X.fillna(X.median())
-            case 'moda':
-                self._log("Tratamento de Nulos: Preenchendo com a MODA das colunas...")
-                return X.fillna(X.mode().iloc[0])
-            case '0':
-                self._log("Tratamento de Nulos: Preenchendo com ZERO.")
-                return X.fillna(0)
-            case _:
-                self._log(f"Aviso: Método de preenchimento '{method}' desconhecido. Usando ZERO por padrão.")
-                return X.fillna(0)
-
-    def _encode_labels(self, y_series, binary_label):
-        y_str = y_series.astype(str).str.strip()
-        
+    def _encode_labels(self, original_labels, binary_label=True):
         if binary_label:
-            self._log("Target: Binarizando rótulos (0=BENIGN, 1=ATTACK)...")
-            is_benign = y_str.str.upper() == 'BENIGN'
-            y = np.where(is_benign, 0, 1).astype(np.int8)
-            target_names = ['BENIGN', 'ATTACK'] 
-        else:
-            self._log("Target: Mantendo multiclasse (Forçando BENIGN=0)...")
-            unique_labels = y_str.unique().tolist()
-            
-            # Encontra o label normal (BENIGN) e força ele a ser o índice 0
-            normal_label = next((l for l in unique_labels if l.upper() in ['BENIGN', 'NORMAL']), None)
-            if normal_label and normal_label in unique_labels:
-                unique_labels.remove(normal_label)
-                unique_labels.insert(0, normal_label) # Coloca na posição 0
-            
-            # Mapeia as strings para inteiros respeitando a nova ordem
-            mapping = {label: idx for idx, label in enumerate(unique_labels)}
-            y = y_str.map(mapping).fillna(-1).astype(np.int8)
-            target_names = unique_labels
+            normal_labels = ["BENIGN", "NORMAL"]
+            encoded_labels = np.where(original_labels.str.upper().isin(normal_labels), 0, 1).astype(np.int32)
+            target_names = ["BENIGN", "ATTACK"]
 
-        return y, target_names
+            return encoded_labels, target_names
 
-    def create_stream(self, df, target_label_col='Label', binary_label=True, 
-                      normalize_method=None, threshold_var=None,
-                      threshold_corr=None, top_n_features=None,
-                      return_stream=True, extra_ignore_cols=None,
-                      imputation_method='0'):
+        unique_labels = original_labels.drop_duplicates().tolist()
+        normal_label = next((label for label in unique_labels if label.upper() in ["BENIGN", "NORMAL"]), None)
 
-        # limpeza básica
-        self._log("Limpeza: Removendo espaços, identificadores e colunas vazias...")
-        df.columns = df.columns.str.strip()
-        target_label_col = target_label_col.strip()
-        
-        # Aplicação do filtro global de features antes de qualquer processamento
-        if self.selected_features is not None:
-            self._log(f"Filtro Global Ativo: Mantendo apenas as {len(self.selected_features)} features especificadas.")
-            
-            # Cria a lista do que manter, garantindo que as features existem no DF
-            cols_to_keep = [c for c in self.selected_features if c in df.columns]
-            
-            # Trava de segurança: Garante que a coluna target NÃO seja excluída
-            if target_label_col in df.columns and target_label_col not in cols_to_keep:
-                cols_to_keep.append(target_label_col)
-                
-            df = df[cols_to_keep]
+        if normal_label is not None:
+            unique_labels.remove(normal_label)
+            unique_labels.insert(0, normal_label)
 
-        ignore_cols = ['Flow ID', 'Timestamp', 'SimillarHTTP', 'Unnamed: 0']
-        if extra_ignore_cols:
-            if isinstance(extra_ignore_cols, str):
-                ignore_cols.append(extra_ignore_cols)
-            else:
-                ignore_cols.extend(extra_ignore_cols)
-                
-        cols_to_drop = [c for c in ignore_cols if c in df.columns]
-        X = df.drop(columns=[target_label_col] + cols_to_drop, errors='ignore')
-        
-        # tratamento numérico
-        self._log("Pré-processamento: Convertendo infinitos...")
-        X = X.select_dtypes(include=[np.number])
-        X.replace([np.inf, -np.inf], [np.finfo(np.float32).max, np.finfo(np.float32).min], inplace=True)
-        X = self._handle_missing_values(X, method=imputation_method)
+        label_mapping = {label: index for index, label in enumerate(unique_labels)}
+        encoded_labels = original_labels.map(label_mapping).to_numpy(dtype=np.int32)
 
-        # normalização 
-        if normalize_method:
-            temp_col_names = X.columns
-            temp_x_array = self._normalize_data(X, method=normalize_method)
-            X = pd.DataFrame(temp_x_array, columns=temp_col_names)
+        return encoded_labels, unique_labels
 
-        # Definição do target e encoding
-        y, target_names = self._encode_labels(df[target_label_col], binary_label)
+    def create_stream(self, df, target_label_col="Label", binary_label=True, imputation_method="0"):
+        processed_df = df.copy()
+        processed_df.columns = processed_df.columns.astype(str).str.strip()
+        target_label_col = str(target_label_col).strip()
 
-        # redução da dimensionalidade (agora atua apenas sobre as features já filtradas)
-        if threshold_var is not None or threshold_corr is not None or top_n_features is not None:
-            self._log("Seleção de Features: Iniciando pipeline de redução de dimensionalidade...")
-            X = self._remove_features(X, y, threshold_var=threshold_var,
-                                      threshold_corr=threshold_corr, top_n_features=top_n_features)
-        else:
-            self._log("Seleção de Features: Nenhuma técnica dinâmica selecionada. Mantendo colunas atuais.")
+        self._validate_dataframe(processed_df, target_label_col)
 
-        # extrai dados finais para retorno 
-        feature_names = X.columns.tolist()
-        final_x_array = X.values
+        processed_df = self._select_features(processed_df, target_label_col)
+        processed_df = self._remove_features(processed_df, target_label_col)
 
-        # criação do retorno
-        if return_stream:
-            self._log("Finalização: Criando objeto NumpyStream para o CapyMOA.\n")
-            stream_obj = NumpyStream(
-                final_x_array, y, target_name="Class", 
-                feature_names=feature_names, target_type="categorical"
-            )
-            return stream_obj, target_names, feature_names
-        else:
-            self._log("Finalização: Retornando DataFrame pandas processado.\n")
-            final_df = pd.DataFrame(final_x_array, columns=feature_names)
-            return final_df, y, target_names
+        original_labels = self._prepare_original_labels(processed_df[target_label_col])
+        features = self._prepare_features(processed_df, target_label_col)
+        features = self._handle_missing_values(features, imputation_method)
+        encoded_labels, target_names = self._encode_labels(original_labels, binary_label)
+
+        feature_names = features.columns.tolist()
+        feature_values = features.to_numpy(dtype=np.float64)
+        label_names = original_labels.tolist()
+
+        if len(feature_values) != len(encoded_labels) or len(encoded_labels) != len(label_names):
+            raise RuntimeError("Features, rótulos binários e rótulos originais possuem tamanhos diferentes.")
+
+        stream = NumpyStream(
+            feature_values,
+            encoded_labels,
+            target_name=target_label_col,
+            feature_names=feature_names,
+            target_type="categorical",
+        )
+
+        self._log(f"Stream criada com {feature_values.shape[0]} instâncias e {feature_values.shape[1]} features.")
+        self._log(f"Treinamento: {'binário' if binary_label else 'multiclasse'}.")
+        self._log(f"Rótulos originais preservados: {len(set(label_names))} classes.")
+
+        return stream, target_names, feature_names, label_names

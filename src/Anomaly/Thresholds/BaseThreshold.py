@@ -1,28 +1,27 @@
 from abc import ABC, abstractmethod
-from typing import Any, Iterable
 
 
 class BaseThreshold(ABC):
     @abstractmethod
-    def initialize(self, scores: Iterable[float]) -> None:
+    def initialize(self, scores):
         raise NotImplementedError
 
     @abstractmethod
-    def getThreshold(self) -> float:
+    def getThreshold(self):
         raise NotImplementedError
 
     @abstractmethod
-    def update(self, score: float) -> None:
+    def update(self, score, index=None):
         raise NotImplementedError
 
     @abstractmethod
-    def reset(self) -> None:
+    def reset(self):
         raise NotImplementedError
 
     @abstractmethod
-    def isReady(self) -> bool:
+    def isReady(self):
         raise NotImplementedError
 
     @abstractmethod
-    def getState(self) -> dict[str, Any]:
+    def getState(self):
         raise NotImplementedError

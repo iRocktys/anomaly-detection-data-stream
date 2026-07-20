@@ -1,212 +1,281 @@
-import math
-from collections import deque
-from typing import Any, Iterable
+from dataclasses import dataclass
 
 import numpy as np
+from scipy.optimize import minimize
 
-from src.Anomaly.Thresholds.IncrementalThreshold import IncrementalThreshold
+from src.Anomaly.Thresholds.BaseThreshold import BaseThreshold
 
 
-class DspotThreshold(IncrementalThreshold):
-    """DSPOT causal para a cauda superior de uma sequência de scores.
+@dataclass
+class DspotConfig:
+    driftDepth: int = 50
+    calibrationSize: int = 1000
+    initialQuantile: float = 0.98
+    risk: float = 0.001
+    refitEvery: int = 1
+    optimizationStarts: int = 10
+    tolerance: float = 1e-8
 
-    O período de calibração da cauda é recebido pelo parâmetro ``warmup`` e
-    deve ser exatamente o mesmo warmup global usado pelo experimento. Durante
-    esse período o limiar ainda não está pronto; os resíduos são acumulados e
-    a distribuição Generalized Pareto (GPD) é inicializada somente ao final do
-    aquecimento.
+    @property
+    def warmupSize(self):
+        return self.driftDepth + self.calibrationSize
 
-    A lógica Peaks-Over-Threshold necessária ao DSPOT está contida nesta
-    classe. SPOT não é exposto como uma técnica independente no projeto.
-    """
-
-    def __init__(
-        self,
-        risk: float = 0.001,
-        initialQuantile: float = 0.98,
-        warmup: int = 200,
-        driftDepth: int | None = None,
-        refitEvery: int = 25,
-    ):
-        self.risk = float(risk)
-        self.initialQuantile = float(initialQuantile)
-        self.warmup = int(warmup)
-        self.driftDepth = int(driftDepth) if driftDepth is not None else self.warmup
-        self.refitEvery = int(refitEvery)
-        self.validateParameters()
-        self.reset()
-
-    def validateParameters(self):
-        if not 0.0 < self.risk < 1.0:
-            raise ValueError("risk deve estar no intervalo (0, 1).")
-        if not 0.5 < self.initialQuantile < 1.0:
-            raise ValueError("initialQuantile deve estar no intervalo (0.5, 1).")
-        if self.warmup < 20:
-            raise ValueError("warmup deve ser maior ou igual a 20 para calibrar a cauda.")
+    def validate(self):
         if self.driftDepth < 2:
             raise ValueError("driftDepth deve ser maior ou igual a 2.")
+
+        if self.calibrationSize < 20:
+            raise ValueError("calibrationSize deve ser maior ou igual a 20.")
+
+        if not 0.5 < self.initialQuantile < 1.0:
+            raise ValueError("initialQuantile deve estar no intervalo (0.5, 1).")
+
+        if not 0.0 < self.risk < 1.0:
+            raise ValueError("risk deve estar no intervalo (0, 1).")
+
         if self.refitEvery < 1:
             raise ValueError("refitEvery deve ser maior ou igual a 1.")
 
-    def initialize(self, scores: Iterable[float]) -> None:
-        for score in scores:
-            self.update(float(score))
+        if self.optimizationStarts < 2:
+            raise ValueError("optimizationStarts deve ser maior ou igual a 2.")
 
-    def currentDrift(self) -> float:
-        if not self.history:
-            return 0.0
-        return float(np.mean(self.history))
+        if self.tolerance <= 0:
+            raise ValueError("tolerance deve ser maior que zero.")
 
-    def getThreshold(self) -> float:
-        if not self.isReady():
-            return math.nan
-        return float(self.currentDrift() + self.extremeResidualThreshold)
 
-    def update(self, score: float) -> None:
-        value = float(score)
-        if not math.isfinite(value):
+class DspotThreshold(BaseThreshold):
+    def __init__(self, config=None):
+        self.config = config if config is not None else DspotConfig()
+        self.config.validate()
+        self.reset()
+
+    def initialize(self, scores):
+        values = np.asarray(scores, dtype=np.float64)
+
+        if len(values) != self.config.warmupSize:
+            raise ValueError(f"O DSPOT deve receber exatamente {self.config.warmupSize} scores no aquecimento.")
+
+        if np.any(~np.isfinite(values)):
+            raise ValueError("O aquecimento do DSPOT contém scores não finitos.")
+
+        driftValues = values[:self.config.driftDepth]
+        calibrationValues = values[self.config.driftDepth:]
+
+        self.normalHistory = [float(value) for value in driftValues]
+        residuals = []
+
+        for value in calibrationValues:
+            drift = self.calculateDrift()
+            residuals.append(float(value - drift))
+            self.addNormalValue(value)
+
+        residuals = np.asarray(residuals, dtype=np.float64)
+        self.initialResidualThreshold = float(np.quantile(residuals, self.config.initialQuantile))
+        self.excesses = [float(value - self.initialResidualThreshold) for value in residuals if value > self.initialResidualThreshold]
+        self.observationCount = len(residuals)
+        self.peakCount = len(self.excesses)
+
+        if self.peakCount < 3:
+            raise ValueError("O DSPOT encontrou menos de três picos durante a calibração.")
+
+        self.fitTail()
+        self.ready = True
+
+    def getThreshold(self):
+        if not self.ready:
+            return np.nan
+
+        return float(self.calculateDrift() + self.extremeResidualThreshold)
+
+    def update(self, score, index=None):
+        if not self.ready:
+            raise RuntimeError("O DSPOT ainda não foi inicializado.")
+
+        score = float(score)
+
+        if not np.isfinite(score):
             raise ValueError("O DSPOT aceita somente scores finitos.")
 
-        drift = self.currentDrift()
-        residual = value - drift
-        self.count += 1
-
-        if not self.ready:
-            self.initialResiduals.append(residual)
-            self.history.append(value)
-            if self.count >= self.warmup:
-                self.fitInitialTail()
-            return
+        drift = self.calculateDrift()
+        residual = score - drift
+        classification = "normal"
+        updatedTail = False
 
         if residual > self.extremeResidualThreshold:
-            self.anomalyCount += 1
+            classification = "anomaly"
+
         elif residual > self.initialResidualThreshold:
-            self.peaks.append(residual - self.initialResidualThreshold)
+            classification = "peak"
+            excess = residual - self.initialResidualThreshold
+            self.excesses.append(float(excess))
+            self.peakCount += 1
+            self.observationCount += 1
             self.peaksSinceFit += 1
-            if self.peaksSinceFit >= self.refitEvery:
+            self.addNormalValue(score)
+
+            if self.peaksSinceFit >= self.config.refitEvery:
                 self.fitTail()
+                self.peaksSinceFit = 0
+                updatedTail = True
 
-        self.updateDriftHistory(value)
-
-    def updateDriftHistory(self, value: float) -> None:
-        """Atualiza a estimativa local de drift com o comportamento atual.
-
-        Pontos para evolução futura, sem inverter o sentido do limiar:
-
-        1. O artigo original mantém observações acima do limiar extremo fora da
-           atualização da cauda. Esta classe já faz isso: valores extremos não
-           entram em ``peaks`` nem no ajuste GPD.
-        2. Para impedir que ataques prolongados elevem a média local de drift,
-           esta atualização pode futuramente ignorar valores classificados como
-           extremos, inserir o valor limitado ao limiar atual (winsorização) ou
-           usar mediana/média aparada no lugar da média simples.
-        3. Outra alternativa é atualizar o drift por EWMA robusta e congelar a
-           atualização enquanto o detector estiver em estado de ataque.
-        4. Essas mudanças preservam a regra correta para scores de anomalia:
-           ataque quando ``score > threshold``. Inverter a onda do threshold
-           destruiria a interpretação probabilística da cauda extrema.
-
-        A implementação atual mantém o histórico completo para preservar o
-        comportamento causal já utilizado nos experimentos. O método isolado
-        permite aplicar posteriormente uma das políticas robustas acima sem
-        alterar o ajuste da cauda.
-        """
-        self.history.append(float(value))
-
-    def fitInitialTail(self) -> None:
-        values = np.asarray(self.initialResiduals, dtype=np.float64)
-        values = values[np.isfinite(values)]
-        if values.size < self.warmup:
-            return
-
-        self.initialResidualThreshold = float(
-            np.quantile(values, self.initialQuantile)
-        )
-        self.peaks = [
-            float(value - self.initialResidualThreshold)
-            for value in values
-            if value > self.initialResidualThreshold
-        ]
-        if not self.peaks:
-            self.peaks = [max(float(np.std(values)), 1e-8)]
-        self.ready = True
-        self.fitTail()
-
-    def fitTail(self) -> None:
-        peaks = np.asarray(self.peaks, dtype=np.float64)
-        peaks = peaks[np.isfinite(peaks) & (peaks > 0)]
-        if peaks.size == 0:
-            self.shape = 0.0
-            self.scale = 1e-8
-            self.extremeResidualThreshold = self.initialResidualThreshold
-            self.peaksSinceFit = 0
-            return
-
-        mean = float(np.mean(peaks))
-        variance = float(np.var(peaks, ddof=1)) if peaks.size > 1 else 0.0
-
-        if variance > mean * mean and variance > 1e-16:
-            shape = 0.5 * (1.0 - ((mean * mean) / variance))
-            shape = float(np.clip(shape, -0.45, 0.45))
-            scale = 0.5 * mean * (1.0 + ((mean * mean) / variance))
         else:
-            shape = 0.0
-            scale = mean
+            self.observationCount += 1
+            self.addNormalValue(score)
 
-        self.shape = shape
-        self.scale = max(float(scale), 1e-8)
-        peakRate = max(len(peaks) / max(self.count, 1), 1e-12)
-        ratio = max(self.risk / peakRate, 1e-12)
+        return {
+            "index": index,
+            "drift": drift,
+            "residual": residual,
+            "classification": classification,
+            "updatedTail": updatedTail,
+            "threshold": self.getThreshold(),
+            "shape": self.shape,
+            "scale": self.scale,
+        }
 
-        if abs(self.shape) < 1e-8:
-            excess = -self.scale * math.log(ratio)
-        else:
-            excess = (
-                self.scale
-                / self.shape
-                * (ratio ** (-self.shape) - 1.0)
-            )
+    def processValue(self, score, index=None):
+        return self.update(score, index)
 
-        self.extremeResidualThreshold = max(
-            self.initialResidualThreshold,
-            self.initialResidualThreshold + float(excess),
-        )
+    def reset(self):
+        self.initialResidualThreshold = np.nan
+        self.extremeResidualThreshold = np.nan
+        self.shape = np.nan
+        self.scale = np.nan
+        self.normalHistory = []
+        self.excesses = []
+        self.observationCount = 0
+        self.peakCount = 0
         self.peaksSinceFit = 0
-
-    def reset(self) -> None:
-        self.count = 0
-        self.anomalyCount = 0
-        self.history = deque(maxlen=self.driftDepth)
-        self.initialResiduals = []
-        self.initialResidualThreshold = math.nan
-        self.extremeResidualThreshold = math.nan
-        self.peaks = []
-        self.peaksSinceFit = 0
-        self.shape = 0.0
-        self.scale = 0.0
         self.ready = False
 
-    def isReady(self) -> bool:
+    def isReady(self):
         return bool(self.ready)
 
-    def getState(self) -> dict[str, Any]:
+    def getState(self):
         return {
             "name": "dspot",
-            "ready": self.isReady(),
-            "count": self.count,
-            "warmup": self.warmup,
-            "warmupRemaining": max(0, self.warmup - self.count),
-            "anomalyCount": self.anomalyCount,
-            "drift": self.currentDrift(),
-            "driftDepth": self.driftDepth,
+            "ready": self.ready,
+            "warmupSize": self.config.warmupSize,
+            "driftDepth": self.config.driftDepth,
+            "calibrationSize": self.config.calibrationSize,
+            "observationCount": self.observationCount,
+            "peakCount": self.peakCount,
             "initialResidualThreshold": self.initialResidualThreshold,
             "extremeResidualThreshold": self.extremeResidualThreshold,
             "threshold": self.getThreshold(),
-            "peakCount": len(self.peaks),
-            "peaksSinceFit": self.peaksSinceFit,
             "shape": self.shape,
             "scale": self.scale,
-            "risk": self.risk,
-            "initialQuantile": self.initialQuantile,
-            "refitEvery": self.refitEvery,
         }
+
+    def calculateDrift(self):
+        if not self.normalHistory:
+            return 0.0
+
+        return float(np.mean(self.normalHistory[-self.config.driftDepth:]))
+
+    def addNormalValue(self, value):
+        self.normalHistory.append(float(value))
+
+        if len(self.normalHistory) > self.config.driftDepth:
+            self.normalHistory.pop(0)
+
+    def fitTail(self):
+        excesses = np.asarray(self.excesses, dtype=np.float64)
+        excesses = excesses[np.isfinite(excesses) & (excesses > 0)]
+
+        if len(excesses) < 3:
+            raise ValueError("Não existem excessos suficientes para ajustar a distribuição GPD.")
+
+        candidates = []
+
+        exponentialScale = float(np.mean(excesses))
+        exponentialLikelihood = self.logLikelihood(excesses, 0.0, exponentialScale)
+        candidates.append((exponentialLikelihood, 0.0, exponentialScale))
+
+        maximum = float(np.max(excesses))
+        minimum = float(np.min(excesses))
+        mean = float(np.mean(excesses))
+        intervals = [(-1.0 / maximum + self.config.tolerance, -self.config.tolerance)]
+
+        if mean > minimum:
+            positiveLower = 2.0 * (mean - minimum) / (mean * minimum)
+            positiveUpper = 2.0 * (mean - minimum) / (minimum * minimum)
+
+            if positiveUpper > positiveLower:
+                intervals.append((positiveLower, positiveUpper))
+
+        for lower, upper in intervals:
+            initialValues = np.linspace(lower, upper, self.config.optimizationStarts)
+
+            for initialValue in initialValues:
+                result = minimize(self.objective, np.array([initialValue]), args=(excesses,), method="L-BFGS-B", bounds=[(lower, upper)])
+
+                if not result.success:
+                    continue
+
+                root = float(result.x[0])
+                functionValue = self.grimshawFunction(root, excesses)
+
+                if not np.isfinite(functionValue) or abs(functionValue) > self.config.tolerance:
+                    continue
+
+                functionV = 1.0 + np.mean(np.log(1.0 + root * excesses))
+                shape = float(functionV - 1.0)
+                scale = float(shape / root)
+
+                if not np.isfinite(shape) or not np.isfinite(scale) or scale <= 0:
+                    continue
+
+                likelihood = self.logLikelihood(excesses, shape, scale)
+
+                if np.isfinite(likelihood):
+                    candidates.append((likelihood, shape, scale))
+
+        bestLikelihood, self.shape, self.scale = max(candidates, key=lambda candidate: candidate[0])
+        ratio = self.config.risk * self.observationCount / self.peakCount
+
+        if np.isclose(self.shape, 0.0):
+            self.extremeResidualThreshold = self.initialResidualThreshold + self.scale * np.log(self.peakCount / (self.config.risk * self.observationCount))
+        else:
+            self.extremeResidualThreshold = self.initialResidualThreshold + self.scale * (ratio ** (-self.shape) - 1.0) / self.shape
+
+        if not np.isfinite(bestLikelihood) or not np.isfinite(self.extremeResidualThreshold):
+            raise RuntimeError("O ajuste do DSPOT produziu valores inválidos.")
+
+    def grimshawFunction(self, value, excesses):
+        terms = 1.0 + value * excesses
+
+        if np.any(terms <= 0):
+            return np.nan
+
+        functionU = np.mean(1.0 / terms)
+        functionV = 1.0 + np.mean(np.log(terms))
+
+        return float(functionU * functionV - 1.0)
+
+    def objective(self, value, excesses):
+        scalarValue = float(np.asarray(value).reshape(-1)[0])
+        functionValue = self.grimshawFunction(scalarValue, excesses)
+
+        if not np.isfinite(functionValue):
+            return 1e100
+
+        return float(functionValue * functionValue)
+
+    def logLikelihood(self, excesses, shape, scale):
+        if scale <= 0:
+            return -np.inf
+
+        if np.isclose(shape, 0.0):
+            return float(-len(excesses) * np.log(scale) - np.sum(excesses) / scale)
+
+        support = 1.0 + shape * excesses / scale
+
+        if np.any(support <= 0):
+            return -np.inf
+
+        return float(-len(excesses) * np.log(scale) - (1.0 + 1.0 / shape) * np.sum(np.log(support)))
+
+
+DSPOT = DspotThreshold
+DSPOTConfig = DspotConfig

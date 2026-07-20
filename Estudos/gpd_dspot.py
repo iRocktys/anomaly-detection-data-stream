@@ -5,980 +5,707 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-from scipy.optimize import brentq
+from scipy.optimize import minimize
 
 
 class GeneralizedPareto:
-    """Funções matemáticas da Distribuição Generalizada de Pareto."""
-
     @staticmethod
-    def cdf(valores, gamma, sigma):
-        valores = np.asarray(valores, dtype=float)
+    def cdf(values, shape, scale):
+        values = np.asarray(values, dtype=np.float64)
 
-        if sigma <= 0:
-            raise ValueError("Sigma deve ser maior que zero.")
+        if scale <= 0:
+            raise ValueError("scale deve ser maior que zero.")
 
-        if np.any(valores < 0):
+        if np.any(values < 0):
             raise ValueError("Os excessos devem ser não negativos.")
 
-        if np.isclose(gamma, 0.0):
-            return 1 - np.exp(-valores / sigma)
+        if np.isclose(shape, 0.0):
+            return 1.0 - np.exp(-values / scale)
 
-        suporte = 1 + gamma * valores / sigma
-        resultado = np.full(valores.shape, np.nan, dtype=float)
-        validos = suporte > 0
-        resultado[validos] = 1 - suporte[validos] ** (-1 / gamma)
-
-        return resultado
-
-    @staticmethod
-    def sobrevivencia(valores, gamma, sigma):
-        return 1 - GeneralizedPareto.cdf(
-            valores,
-            gamma,
-            sigma
-        )
+        support = 1.0 + (shape * values / scale)
+        result = np.full(values.shape, np.nan, dtype=np.float64)
+        valid = support > 0
+        result[valid] = 1.0 - support[valid] ** (-1.0 / shape)
+        return result
 
     @staticmethod
-    def densidade(valores, gamma, sigma):
-        valores = np.asarray(valores, dtype=float)
+    def survival(values, shape, scale):
+        return 1.0 - GeneralizedPareto.cdf(values, shape, scale)
 
-        if sigma <= 0:
-            raise ValueError("Sigma deve ser maior que zero.")
+    @staticmethod
+    def density(values, shape, scale):
+        values = np.asarray(values, dtype=np.float64)
 
-        if np.any(valores < 0):
+        if scale <= 0:
+            raise ValueError("scale deve ser maior que zero.")
+
+        if np.any(values < 0):
             raise ValueError("Os excessos devem ser não negativos.")
 
-        if np.isclose(gamma, 0.0):
-            return np.exp(-valores / sigma) / sigma
+        if np.isclose(shape, 0.0):
+            return np.exp(-values / scale) / scale
 
-        suporte = 1 + gamma * valores / sigma
-        resultado = np.full(valores.shape, np.nan, dtype=float)
-        validos = suporte > 0
-
-        resultado[validos] = (
-            (1 / sigma)
-            * suporte[validos] ** (-1 / gamma - 1)
-        )
-
-        return resultado
+        support = 1.0 + (shape * values / scale)
+        result = np.full(values.shape, np.nan, dtype=np.float64)
+        valid = support > 0
+        result[valid] = (1.0 / scale) * support[valid] ** (-1.0 / shape - 1.0)
+        return result
 
     @staticmethod
-    def logverossimilhanca(valores, gamma, sigma):
-        valores = np.asarray(valores, dtype=float)
-        quantidade = len(valores)
+    def logLikelihood(values, shape, scale):
+        values = np.asarray(values, dtype=np.float64)
+        count = len(values)
 
-        if quantidade == 0:
+        if count == 0 or scale <= 0 or np.any(values < 0):
             return -np.inf
 
-        if sigma <= 0:
+        if np.isclose(shape, 0.0):
+            return -count * np.log(scale) - np.sum(values) / scale
+
+        support = 1.0 + (shape * values / scale)
+
+        if np.any(support <= 0):
             return -np.inf
 
-        if np.any(valores < 0):
-            return -np.inf
-
-        if np.isclose(gamma, 0.0):
-            return (
-                -quantidade * np.log(sigma)
-                - np.sum(valores) / sigma
-            )
-
-        suporte = 1 + gamma * valores / sigma
-
-        if np.any(suporte <= 0):
-            return -np.inf
-
-        return (
-            -quantidade * np.log(sigma)
-            - (1 + 1 / gamma)
-            * np.sum(np.log(suporte))
-        )
+        return -count * np.log(scale) - (1.0 + 1.0 / shape) * np.sum(np.log(support))
 
 
 class TailSelection:
-    """Seleção do limiar intermediário, picos e excessos."""
-
     @staticmethod
-    def selecionar(valores, quantil):
-        valores = np.asarray(valores, dtype=float)
+    def select(values, quantile):
+        values = np.asarray(values, dtype=np.float64)
 
-        if len(valores) == 0:
+        if len(values) == 0:
             raise ValueError("A série está vazia.")
 
-        if not 0 < quantil < 1:
-            raise ValueError("O quantil deve estar entre zero e um.")
+        if not 0.0 < quantile < 1.0:
+            raise ValueError("quantile deve estar no intervalo (0, 1).")
 
-        limiar = float(np.quantile(valores, quantil))
-        mascara = valores > limiar
-        picos = valores[mascara]
-        excessos = picos - limiar
-
-        return {
-            "limiar": limiar,
-            "mascara": mascara,
-            "picos": picos,
-            "excessos": excessos
-        }
-
-
-class GridSearchGPD:
-    """Estimação didática dos parâmetros da GPD por busca em grade."""
-
-    @staticmethod
-    def estimar(
-        excessos,
-        gammaMinimo=-0.40,
-        gammaMaximo=0.80,
-        quantidadeGamma=121,
-        fatorSigmaMinimo=0.10,
-        fatorSigmaMaximo=3.00,
-        quantidadeSigma=150
-    ):
-        excessos = np.asarray(excessos, dtype=float)
-
-        if len(excessos) == 0:
-            raise ValueError("Não existem excessos para estimar a GPD.")
-
-        media = float(np.mean(excessos))
-        desvio = (
-            float(np.std(excessos, ddof=1))
-            if len(excessos) > 1
-            else media
-        )
-
-        escalaReferencia = max(
-            media,
-            desvio,
-            1e-8
-        )
-
-        gradeGamma = np.linspace(
-            gammaMinimo,
-            gammaMaximo,
-            quantidadeGamma
-        )
-
-        gradeSigma = np.linspace(
-            escalaReferencia * fatorSigmaMinimo,
-            escalaReferencia * fatorSigmaMaximo,
-            quantidadeSigma
-        )
-
-        resultados = []
-
-        for gamma in gradeGamma:
-            for sigma in gradeSigma:
-                logAtual = GeneralizedPareto.logverossimilhanca(
-                    excessos,
-                    gamma,
-                    sigma
-                )
-
-                if np.isfinite(logAtual):
-                    resultados.append({
-                        "gamma": gamma,
-                        "sigma": sigma,
-                        "logVerossimilhanca": logAtual
-                    })
-
-        if len(resultados) == 0:
-            raise RuntimeError(
-                "Nenhuma combinação válida foi encontrada na grade."
-            )
-
-        tabela = (
-            pd.DataFrame(resultados)
-            .sort_values(
-                "logVerossimilhanca",
-                ascending=False
-            )
-            .reset_index(drop=True)
-        )
-
-        melhor = tabela.iloc[0]
+        threshold = float(np.quantile(values, quantile))
+        mask = values > threshold
+        peaks = values[mask]
+        excesses = peaks - threshold
 
         return {
-            "gamma": float(melhor["gamma"]),
-            "sigma": float(melhor["sigma"]),
-            "logVerossimilhanca": float(
-                melhor["logVerossimilhanca"]
-            ),
-            "resultados": tabela
+            "threshold": threshold,
+            "mask": mask,
+            "peaks": peaks,
+            "excesses": excesses,
         }
 
 
 class GrimshawGPD:
-    """Estimação dos parâmetros da GPD pela técnica de Grimshaw."""
-
     @staticmethod
-    def funcaoU(x, valores):
-        valores = np.asarray(valores, dtype=float)
-        termos = 1 + x * valores
+    def functionU(x, values):
+        values = np.asarray(values, dtype=np.float64)
+        terms = 1.0 + x * values
 
-        if np.any(termos <= 0):
+        if np.any(terms <= 0):
             return np.nan
 
-        return float(np.mean(1 / termos))
+        return float(np.mean(1.0 / terms))
 
     @staticmethod
-    def funcaoV(x, valores):
-        valores = np.asarray(valores, dtype=float)
-        termos = 1 + x * valores
+    def functionV(x, values):
+        values = np.asarray(values, dtype=np.float64)
+        terms = 1.0 + x * values
 
-        if np.any(termos <= 0):
+        if np.any(terms <= 0):
             return np.nan
 
-        return float(
-            1 + np.mean(np.log(termos))
-        )
+        return float(1.0 + np.mean(np.log(terms)))
 
     @staticmethod
-    def funcaoW(x, valores):
-        u = GrimshawGPD.funcaoU(
-            x,
-            valores
-        )
+    def functionW(x, values):
+        functionU = GrimshawGPD.functionU(x, values)
+        functionV = GrimshawGPD.functionV(x, values)
 
-        v = GrimshawGPD.funcaoV(
-            x,
-            valores
-        )
-
-        if not np.isfinite(u) or not np.isfinite(v):
+        if not np.isfinite(functionU) or not np.isfinite(functionV):
             return np.nan
 
-        return u * v - 1
+        return functionU * functionV - 1.0
 
     @staticmethod
-    def criarIntervalos(valores, epsilon=1e-8):
-        valores = np.asarray(valores, dtype=float)
+    def objective(x, values):
+        scalarX = float(np.asarray(x).reshape(-1)[0])
+        functionW = GrimshawGPD.functionW(scalarX, values)
 
-        if len(valores) == 0:
+        if not np.isfinite(functionW):
+            return 1e100
+
+        return float(functionW * functionW)
+
+    @staticmethod
+    def createIntervals(values, epsilon=1e-8):
+        values = np.asarray(values, dtype=np.float64)
+
+        if len(values) == 0:
             raise ValueError("Não existem excessos.")
 
-        if np.any(valores <= 0):
-            raise ValueError(
-                "O Grimshaw exige excessos estritamente positivos."
-            )
+        if np.any(values <= 0):
+            raise ValueError("O Grimshaw exige excessos estritamente positivos.")
 
-        maior = float(np.max(valores))
-        menor = float(np.min(valores))
-        media = float(np.mean(valores))
+        maximum = float(np.max(values))
+        minimum = float(np.min(values))
+        mean = float(np.mean(values))
 
-        intervalos = [
-            (
-                -1 / maior + epsilon,
-                -epsilon
-            )
-        ]
+        negativeLower = -1.0 / maximum + epsilon
+        negativeUpper = -epsilon
+        intervals = [(negativeLower, negativeUpper)]
 
-        if media > menor:
-            positivoInferior = (
-                2
-                * (media - menor)
-                / (media * menor)
-            )
+        if mean > minimum:
+            positiveLower = 2.0 * (mean - minimum) / (mean * minimum)
+            positiveUpper = 2.0 * (mean - minimum) / (minimum * minimum)
 
-            positivoSuperior = (
-                2
-                * (media - menor)
-                / (menor ** 2)
-            )
+            if positiveUpper > positiveLower:
+                intervals.append((positiveLower, positiveUpper))
 
-            if positivoSuperior > positivoInferior:
-                intervalos.append(
-                    (
-                        positivoInferior,
-                        positivoSuperior
-                    )
-                )
-
-        return intervalos
+        return intervals
 
     @staticmethod
-    def buscarRaizes(
-        valores,
-        intervalos,
-        quantidadePontos=10000
-    ):
-        valores = np.asarray(valores, dtype=float)
-        raizes = []
+    def findRoots(values, intervals, starts=10, tolerance=1e-8):
+        values = np.asarray(values, dtype=np.float64)
+        roots = []
 
-        for limiteInferior, limiteSuperior in intervalos:
-            pontos = np.linspace(
-                limiteInferior,
-                limiteSuperior,
-                quantidadePontos
-            )
+        for lower, upper in intervals:
+            initialPoints = np.linspace(lower, upper, max(int(starts), 2))
 
-            valoresW = np.array([
-                GrimshawGPD.funcaoW(
-                    x,
-                    valores
+            for initialPoint in initialPoints:
+                result = minimize(
+                    fun=GrimshawGPD.objective,
+                    x0=np.array([initialPoint], dtype=np.float64),
+                    args=(values,),
+                    method="L-BFGS-B",
+                    bounds=[(lower, upper)],
                 )
-                for x in pontos
-            ])
 
-            for indice in range(len(pontos) - 1):
-                xEsquerda = pontos[indice]
-                xDireita = pontos[indice + 1]
-
-                wEsquerda = valoresW[indice]
-                wDireita = valoresW[indice + 1]
-
-                if not (
-                    np.isfinite(wEsquerda)
-                    and np.isfinite(wDireita)
-                ):
+                if not result.success:
                     continue
 
-                if np.isclose(
-                    wEsquerda,
-                    0,
-                    atol=1e-10
-                ):
-                    raizes.append(xEsquerda)
-                    continue
+                root = float(result.x[0])
+                functionW = GrimshawGPD.functionW(root, values)
 
-                if wEsquerda * wDireita < 0:
-                    try:
-                        raiz = brentq(
-                            lambda x: GrimshawGPD.funcaoW(
-                                x,
-                                valores
-                            ),
-                            xEsquerda,
-                            xDireita
-                        )
+                if np.isfinite(functionW) and abs(functionW) <= tolerance:
+                    roots.append(root)
 
-                        raizes.append(raiz)
+        uniqueRoots = []
 
-                    except ValueError:
-                        continue
+        for root in sorted(roots):
+            if np.isclose(root, 0.0, atol=tolerance):
+                continue
 
-        return sorted(
-            set(
-                np.round(
-                    raizes,
-                    decimals=12
-                )
-            )
-        )
+            if not any(np.isclose(root, current, atol=tolerance, rtol=0.0) for current in uniqueRoots):
+                uniqueRoots.append(root)
+
+        return uniqueRoots
 
     @staticmethod
-    def estimar(
-        excessos,
-        quantidadePontos=10000
-    ):
-        excessos = np.asarray(excessos, dtype=float)
+    def estimate(excesses, starts=10, tolerance=1e-8):
+        excesses = np.asarray(excesses, dtype=np.float64)
+        excesses = excesses[np.isfinite(excesses) & (excesses > 0)]
 
-        if len(excessos) == 0:
-            raise ValueError(
-                "Não existem excessos para ajustar a GPD."
-            )
+        if len(excesses) == 0:
+            raise ValueError("Não existem excessos válidos para ajustar a GPD.")
 
-        if np.any(excessos <= 0):
-            raise ValueError(
-                "Os excessos devem ser estritamente positivos."
-            )
+        intervals = GrimshawGPD.createIntervals(excesses)
+        roots = GrimshawGPD.findRoots(excesses, intervals, starts, tolerance)
+        candidates = []
 
-        intervalos = GrimshawGPD.criarIntervalos(
-            excessos
+        exponentialShape = 0.0
+        exponentialScale = float(np.mean(excesses))
+        exponentialLogLikelihood = GeneralizedPareto.logLikelihood(
+            excesses,
+            exponentialShape,
+            exponentialScale,
         )
 
-        raizes = GrimshawGPD.buscarRaizes(
-            excessos,
-            intervalos,
-            quantidadePontos=quantidadePontos
+        candidates.append(
+            {
+                "x": 0.0,
+                "shape": exponentialShape,
+                "scale": exponentialScale,
+                "logLikelihood": exponentialLogLikelihood,
+                "source": "exponential",
+            }
         )
 
-        candidatos = []
+        for root in roots:
+            functionV = GrimshawGPD.functionV(root, excesses)
+            shape = functionV - 1.0
+            scale = shape / root
 
-        gammaExponencial = 0.0
-        sigmaExponencial = float(
-            np.mean(excessos)
-        )
-
-        logExponencial = (
-            GeneralizedPareto.logverossimilhanca(
-                excessos,
-                gammaExponencial,
-                sigmaExponencial
-            )
-        )
-
-        candidatos.append({
-            "x": 0.0,
-            "gamma": gammaExponencial,
-            "sigma": sigmaExponencial,
-            "logVerossimilhanca": logExponencial,
-            "origem": "caso exponencial"
-        })
-
-        for raiz in raizes:
-            if np.isclose(raiz, 0):
+            if not np.isfinite(shape) or not np.isfinite(scale) or scale <= 0:
                 continue
 
-            vRaiz = GrimshawGPD.funcaoV(
-                raiz,
-                excessos
-            )
+            support = 1.0 + (shape * excesses / scale)
 
-            gamma = vRaiz - 1
-            sigma = gamma / raiz
-
-            if sigma <= 0:
+            if np.any(support <= 0):
                 continue
 
-            suporte = (
-                1
-                + gamma
-                * excessos
-                / sigma
-            )
+            logLikelihood = GeneralizedPareto.logLikelihood(excesses, shape, scale)
 
-            if np.any(suporte <= 0):
+            if not np.isfinite(logLikelihood):
                 continue
 
-            logAtual = (
-                GeneralizedPareto.logverossimilhanca(
-                    excessos,
-                    gamma,
-                    sigma
-                )
+            candidates.append(
+                {
+                    "x": root,
+                    "shape": shape,
+                    "scale": scale,
+                    "logLikelihood": logLikelihood,
+                    "source": "grimshawRoot",
+                }
             )
 
-            if not np.isfinite(logAtual):
-                continue
-
-            candidatos.append({
-                "x": raiz,
-                "gamma": gamma,
-                "sigma": sigma,
-                "logVerossimilhanca": logAtual,
-                "origem": "raiz de w(x)"
-            })
-
-        tabela = (
-            pd.DataFrame(candidatos)
-            .sort_values(
-                "logVerossimilhanca",
-                ascending=False
-            )
+        candidatesTable = (
+            pd.DataFrame(candidates)
+            .sort_values("logLikelihood", ascending=False)
             .reset_index(drop=True)
         )
 
-        melhor = tabela.iloc[0]
+        bestCandidate = candidatesTable.iloc[0]
 
         return {
-            "gamma": float(melhor["gamma"]),
-            "sigma": float(melhor["sigma"]),
-            "logVerossimilhanca": float(
-                melhor["logVerossimilhanca"]
-            ),
-            "x": float(melhor["x"]),
-            "origem": melhor["origem"],
-            "raizes": raizes,
-            "intervalos": intervalos,
-            "candidatos": tabela
+            "shape": float(bestCandidate["shape"]),
+            "scale": float(bestCandidate["scale"]),
+            "logLikelihood": float(bestCandidate["logLikelihood"]),
+            "x": float(bestCandidate["x"]),
+            "source": str(bestCandidate["source"]),
+            "roots": roots,
+            "intervals": intervals,
+            "candidates": candidatesTable,
         }
 
 
 class POTThreshold:
-    """Cálculo do limiar extremo e classificação POT."""
-
     @staticmethod
-    def calcularZq(
-        limiar,
-        gamma,
-        sigma,
-        quantidadeObservacoes,
-        quantidadePicos,
-        risco
+    def calculate(
+        initialThreshold,
+        shape,
+        scale,
+        observationCount,
+        peakCount,
+        risk,
     ):
-        if sigma <= 0:
-            raise ValueError(
-                "Sigma deve ser maior que zero."
+        if scale <= 0:
+            raise ValueError("scale deve ser maior que zero.")
+
+        if observationCount <= 0:
+            raise ValueError("observationCount deve ser maior que zero.")
+
+        if peakCount <= 0:
+            raise ValueError("peakCount deve ser maior que zero.")
+
+        if not 0.0 < risk < 1.0:
+            raise ValueError("risk deve estar no intervalo (0, 1).")
+
+        ratio = risk * observationCount / peakCount
+
+        if ratio <= 0:
+            raise ValueError("A razão usada no cálculo do limiar é inválida.")
+
+        if np.isclose(shape, 0.0):
+            extremeThreshold = initialThreshold + scale * np.log(peakCount / (risk * observationCount))
+        else:
+            extremeThreshold = initialThreshold + scale / shape * (ratio ** (-shape) - 1.0)
+
+        if not np.isfinite(extremeThreshold):
+            raise RuntimeError("O cálculo do limiar extremo produziu um valor inválido.")
+
+        if extremeThreshold <= initialThreshold:
+            raise RuntimeError(
+                "O limiar extremo deve ser maior que o limiar intermediário."
             )
 
-        if quantidadeObservacoes <= 0:
-            raise ValueError(
-                "A quantidade de observações deve ser positiva."
-            )
-
-        if quantidadePicos <= 0:
-            raise ValueError(
-                "A quantidade de picos deve ser positiva."
-            )
-
-        if not 0 < risco < 1:
-            raise ValueError(
-                "O risco deve estar entre zero e um."
-            )
-
-        if np.isclose(gamma, 0.0):
-            return (
-                limiar
-                + sigma
-                * np.log(
-                    quantidadePicos
-                    / (
-                        risco
-                        * quantidadeObservacoes
-                    )
-                )
-            )
-
-        razao = (
-            risco
-            * quantidadeObservacoes
-            / quantidadePicos
-        )
-
-        return (
-            limiar
-            + sigma / gamma
-            * (
-                razao ** (-gamma)
-                - 1
-            )
-        )
-
-    @staticmethod
-    def classificar(
-        valores,
-        limiarIntermediario,
-        limiarExtremo
-    ):
-        valores = np.asarray(valores, dtype=float)
-
-        classificacao = np.full(
-            len(valores),
-            "comum",
-            dtype=object
-        )
-
-        classificacao[
-            (valores > limiarIntermediario)
-            & (valores <= limiarExtremo)
-        ] = "pico"
-
-        classificacao[
-            valores > limiarExtremo
-        ] = "anomalia"
-
-        return classificacao
+        return float(extremeThreshold)
 
 
 @dataclass
 class DSPOTConfig:
-    tamanhoAquecimento: int = 1024
-    janelaMedia: int = 50
-    quantilInicial: float = 0.98
-    risco: float = 0.001
-    quantidadePontosGrimshaw: int = 2000
-    atualizarACadaPicos: int = 1
+    driftDepth: int = 50
+    calibrationSize: int = 1024
+    initialQuantile: float = 0.98
+    risk: float = 0.001
+    grimshawStarts: int = 10
+    grimshawTolerance: float = 1e-8
+    refitEvery: int = 1
+
+    def validate(self):
+        if self.driftDepth < 2:
+            raise ValueError("driftDepth deve ser maior ou igual a 2.")
+
+        if self.calibrationSize < 20:
+            raise ValueError("calibrationSize deve ser maior ou igual a 20.")
+
+        if not 0.5 < self.initialQuantile < 1.0:
+            raise ValueError("initialQuantile deve estar no intervalo (0.5, 1).")
+
+        if not 0.0 < self.risk < 1.0:
+            raise ValueError("risk deve estar no intervalo (0, 1).")
+
+        if self.grimshawStarts < 2:
+            raise ValueError("grimshawStarts deve ser maior ou igual a 2.")
+
+        if self.grimshawTolerance <= 0:
+            raise ValueError("grimshawTolerance deve ser maior que zero.")
+
+        if self.refitEvery < 1:
+            raise ValueError("refitEvery deve ser maior ou igual a 1.")
+
+    @property
+    def warmupSize(self):
+        return self.driftDepth + self.calibrationSize
 
 
 class DSPOT:
-    """Execução completa do DSPOT sobre uma série univariada."""
-
     def __init__(self, config=None):
-        self.config = (
-            config
-            if config is not None
-            else DSPOTConfig()
-        )
+        self.config = config if config is not None else DSPOTConfig()
+        self.config.validate()
+        self.reset()
 
-        self.limiarT = None
-        self.limiarZq = None
+    def reset(self):
+        self.initialResidualThreshold = np.nan
+        self.extremeResidualThreshold = np.nan
+        self.shape = np.nan
+        self.scale = np.nan
+        self.logLikelihood = np.nan
+        self.normalHistory = []
+        self.excesses = []
+        self.adjustmentHistory = []
+        self.observationCount = 0
+        self.peakCount = 0
+        self.peaksSinceFit = 0
+        self.initialResult = None
+        self.results = None
+        self.ready = False
 
-        self.gamma = None
-        self.sigma = None
-        self.logVerossimilhanca = None
-
-        self.excessos = []
-        self.historicoNormal = []
-        self.historicoAjustes = []
-
-        self.quantidadeObservacoes = 0
-        self.quantidadePicos = 0
-        self.picosDesdeAtualizacao = 0
-
-        self.resultados = None
-        self.resultadoInicial = None
-
-    def calcularMediaLocal(self):
-        if len(self.historicoNormal) == 0:
+    def currentDrift(self):
+        if len(self.normalHistory) == 0:
             return 0.0
 
-        valoresJanela = self.historicoNormal[
-            -self.config.janelaMedia:
-        ]
+        return float(np.mean(self.normalHistory[-self.config.driftDepth:]))
 
-        return float(
-            np.mean(valoresJanela)
-        )
+    def addNormalValue(self, value):
+        self.normalHistory.append(float(value))
 
-    def adicionarAoHistoricoNormal(self, valor):
-        self.historicoNormal.append(
-            float(valor)
-        )
+        if len(self.normalHistory) > self.config.driftDepth:
+            self.normalHistory.pop(0)
 
-        if (
-            len(self.historicoNormal)
-            > self.config.janelaMedia
-        ):
-            self.historicoNormal.pop(0)
+    def fillDriftWindow(self, values):
+        values = np.asarray(values, dtype=np.float64)
 
-    def calcularResiduosAquecimento(
-        self,
-        valoresAquecimento
-    ):
-        valoresAquecimento = np.asarray(
-            valoresAquecimento,
-            dtype=float
-        )
+        if len(values) != self.config.driftDepth:
+            raise ValueError("A quantidade de valores não corresponde a driftDepth.")
 
-        medias = []
-        residuos = []
+        if np.any(~np.isfinite(values)):
+            raise ValueError("A janela inicial contém valores não finitos.")
 
-        self.historicoNormal = []
+        self.normalHistory = [float(value) for value in values]
 
-        for indice, valor in enumerate(
-            valoresAquecimento
-        ):
-            if indice == 0:
-                mediaLocal = float(valor)
-            else:
-                mediaLocal = (
-                    self.calcularMediaLocal()
-                )
+    def calculateCalibrationResiduals(self, values):
+        values = np.asarray(values, dtype=np.float64)
 
-            residuo = (
-                float(valor)
-                - mediaLocal
-            )
+        if len(values) != self.config.calibrationSize:
+            raise ValueError("A quantidade de valores não corresponde a calibrationSize.")
 
-            medias.append(mediaLocal)
-            residuos.append(residuo)
+        drifts = []
+        residuals = []
 
-            self.adicionarAoHistoricoNormal(
-                valor
-            )
+        for value in values:
+            if not np.isfinite(value):
+                raise ValueError("A calibração contém valores não finitos.")
+
+            drift = self.currentDrift()
+            residual = float(value) - drift
+            drifts.append(drift)
+            residuals.append(residual)
+            self.addNormalValue(value)
 
         return (
-            np.asarray(medias, dtype=float),
-            np.asarray(residuos, dtype=float)
+            np.asarray(drifts, dtype=np.float64),
+            np.asarray(residuals, dtype=np.float64),
         )
 
-    def ajustarCauda(self, fase, indice):
-        ajuste = GrimshawGPD.estimar(
-            self.excessos,
-            quantidadePontos=(
-                self.config.quantidadePontosGrimshaw
-            )
+    def fitTail(self, phase, index):
+        fit = GrimshawGPD.estimate(
+            self.excesses,
+            starts=self.config.grimshawStarts,
+            tolerance=self.config.grimshawTolerance,
         )
 
-        self.gamma = ajuste["gamma"]
-        self.sigma = ajuste["sigma"]
-        self.logVerossimilhanca = ajuste[
-            "logVerossimilhanca"
-        ]
+        self.shape = fit["shape"]
+        self.scale = fit["scale"]
+        self.logLikelihood = fit["logLikelihood"]
 
-        self.limiarZq = POTThreshold.calcularZq(
-            limiar=self.limiarT,
-            gamma=self.gamma,
-            sigma=self.sigma,
-            quantidadeObservacoes=(
-                self.quantidadeObservacoes
-            ),
-            quantidadePicos=(
-                self.quantidadePicos
-            ),
-            risco=self.config.risco
+        previousThreshold = self.extremeResidualThreshold
+
+        self.extremeResidualThreshold = POTThreshold.calculate(
+            initialThreshold=self.initialResidualThreshold,
+            shape=self.shape,
+            scale=self.scale,
+            observationCount=self.observationCount,
+            peakCount=self.peakCount,
+            risk=self.config.risk,
         )
 
-        self.historicoAjustes.append({
-            "indice": indice,
-            "fase": fase,
-            "quantidadeObservacoes": (
-                self.quantidadeObservacoes
-            ),
-            "quantidadePicos": (
-                self.quantidadePicos
-            ),
-            "gamma": self.gamma,
-            "sigma": self.sigma,
-            "logVerossimilhanca": (
-                self.logVerossimilhanca
-            ),
-            "limiarTResidual": self.limiarT,
-            "limiarZqResidual": self.limiarZq,
-            "origem": ajuste["origem"],
-            "quantidadeRaizes": len(
-                ajuste["raizes"]
-            )
-        })
-
-    def inicializar(self, valoresAquecimento):
-        valoresAquecimento = np.asarray(
-            valoresAquecimento,
-            dtype=float
+        self.adjustmentHistory.append(
+            {
+                "index": index,
+                "phase": phase,
+                "observationCount": self.observationCount,
+                "peakCount": self.peakCount,
+                "shape": self.shape,
+                "scale": self.scale,
+                "logLikelihood": self.logLikelihood,
+                "initialResidualThreshold": self.initialResidualThreshold,
+                "previousExtremeResidualThreshold": previousThreshold,
+                "extremeResidualThreshold": self.extremeResidualThreshold,
+                "source": fit["source"],
+                "rootCount": len(fit["roots"]),
+            }
         )
 
-        if (
-            len(valoresAquecimento)
-            != self.config.tamanhoAquecimento
-        ):
+    def initialize(self, values):
+        values = np.asarray(values, dtype=np.float64)
+
+        if len(values) != self.config.warmupSize:
             raise ValueError(
-                "A quantidade de valores não corresponde "
-                "ao tamanho do aquecimento."
+                "A inicialização deve receber driftDepth + calibrationSize valores."
             )
 
-        medias, residuos = (
-            self.calcularResiduosAquecimento(
-                valoresAquecimento
-            )
+        if np.any(~np.isfinite(values)):
+            raise ValueError("A inicialização contém valores não finitos.")
+
+        driftValues = values[:self.config.driftDepth]
+        calibrationValues = values[self.config.driftDepth:]
+
+        self.fillDriftWindow(driftValues)
+
+        calibrationDrifts, calibrationResiduals = self.calculateCalibrationResiduals(
+            calibrationValues
         )
 
-        self.quantidadeObservacoes = len(
-            residuos
+        tail = TailSelection.select(
+            calibrationResiduals,
+            self.config.initialQuantile,
         )
 
-        selecao = TailSelection.selecionar(
-            residuos,
-            self.config.quantilInicial
-        )
+        self.initialResidualThreshold = tail["threshold"]
+        self.excesses = [float(value) for value in tail["excesses"]]
+        self.peakCount = len(self.excesses)
+        self.observationCount = self.config.calibrationSize
 
-        self.limiarT = selecao["limiar"]
-        self.excessos = list(
-            selecao["excessos"]
-        )
-
-        self.quantidadePicos = len(
-            self.excessos
-        )
-
-        if self.quantidadePicos < 3:
+        if self.peakCount < 3:
             raise ValueError(
-                "Foram encontrados poucos picos no aquecimento. "
-                "Reduza o quantil inicial ou aumente o aquecimento."
+                "Foram encontrados poucos picos na calibração. "
+                "Aumente calibrationSize ou reduza initialQuantile."
             )
 
-        self.ajustarCauda(
-            fase="aquecimento",
-            indice=(
-                self.config.tamanhoAquecimento
-                - 1
-            )
+        self.fitTail(
+            phase="initialization",
+            index=self.config.warmupSize - 1,
         )
 
-        self.resultadoInicial = {
-            "medias": medias,
-            "residuos": residuos,
-            "mascaraPicos": selecao["mascara"],
-            "picos": selecao["picos"],
-            "excessos": selecao["excessos"]
+        self.ready = True
+
+        self.initialResult = {
+            "driftValues": driftValues,
+            "calibrationValues": calibrationValues,
+            "calibrationDrifts": calibrationDrifts,
+            "calibrationResiduals": calibrationResiduals,
+            "peakMask": tail["mask"],
+            "peaks": tail["peaks"],
+            "excesses": tail["excesses"],
         }
 
-        return self.resultadoInicial
+        return self.initialResult
 
-    def processarValor(self, valor, indice):
-        mediaLocal = self.calcularMediaLocal()
+    def processValue(self, value, index):
+        if not self.ready:
+            raise RuntimeError("O DSPOT ainda não foi inicializado.")
 
-        residuo = (
-            float(valor)
-            - mediaLocal
-        )
+        value = float(value)
 
-        limiarCaudaOriginal = (
-            mediaLocal
-            + self.limiarT
-        )
+        if not np.isfinite(value):
+            raise ValueError("O DSPOT aceita somente valores finitos.")
 
-        limiarExtremoOriginal = (
-            mediaLocal
-            + self.limiarZq
-        )
+        drift = self.currentDrift()
+        residual = value - drift
+        initialThresholdBefore = self.initialResidualThreshold
+        extremeThresholdBefore = self.extremeResidualThreshold
+        originalInitialThresholdBefore = drift + initialThresholdBefore
+        originalExtremeThresholdBefore = drift + extremeThresholdBefore
+        classification = "normal"
+        updatedTail = False
 
-        self.quantidadeObservacoes += 1
-        atualizouCauda = False
+        if residual > extremeThresholdBefore:
+            classification = "anomaly"
 
-        if residuo > self.limiarZq:
-            classificacao = "anomalia"
+        elif residual > initialThresholdBefore:
+            classification = "incrementalPeak"
+            excess = residual - initialThresholdBefore
+            self.excesses.append(float(excess))
+            self.peakCount += 1
+            self.observationCount += 1
+            self.peaksSinceFit += 1
+            self.addNormalValue(value)
 
-        elif residuo > self.limiarT:
-            classificacao = "pico incremental"
-
-            excesso = (
-                residuo
-                - self.limiarT
-            )
-
-            self.excessos.append(excesso)
-            self.quantidadePicos += 1
-            self.picosDesdeAtualizacao += 1
-
-            self.adicionarAoHistoricoNormal(
-                valor
-            )
-
-            if (
-                self.picosDesdeAtualizacao
-                >= self.config.atualizarACadaPicos
-            ):
-                self.ajustarCauda(
-                    fase="incremental",
-                    indice=indice
-                )
-
-                self.picosDesdeAtualizacao = 0
-                atualizouCauda = True
+            if self.peaksSinceFit >= self.config.refitEvery:
+                self.fitTail(phase="incremental", index=index)
+                self.peaksSinceFit = 0
+                updatedTail = True
 
         else:
-            classificacao = "normal"
+            self.observationCount += 1
+            self.addNormalValue(value)
 
-            self.adicionarAoHistoricoNormal(
-                valor
-            )
+        initialThresholdAfter = self.initialResidualThreshold
+        extremeThresholdAfter = self.extremeResidualThreshold
+        originalInitialThresholdAfter = drift + initialThresholdAfter
+        originalExtremeThresholdAfter = drift + extremeThresholdAfter
 
         return {
-            "mediaLocal": mediaLocal,
-            "residuo": residuo,
-            "limiarCauda": limiarCaudaOriginal,
-            "limiarExtremo": limiarExtremoOriginal,
-            "classificacao": classificacao,
-            "gamma": self.gamma,
-            "sigma": self.sigma,
-            "zqResidual": self.limiarZq,
-            "atualizouCauda": atualizouCauda
+            "drift": drift,
+            "residual": residual,
+            "classification": classification,
+            "updatedTail": updatedTail,
+            "initialResidualThresholdBefore": initialThresholdBefore,
+            "extremeResidualThresholdBefore": extremeThresholdBefore,
+            "initialResidualThresholdAfter": initialThresholdAfter,
+            "extremeResidualThresholdAfter": extremeThresholdAfter,
+            "originalInitialThresholdBefore": originalInitialThresholdBefore,
+            "originalExtremeThresholdBefore": originalExtremeThresholdBefore,
+            "originalInitialThresholdAfter": originalInitialThresholdAfter,
+            "originalExtremeThresholdAfter": originalExtremeThresholdAfter,
+            "shape": self.shape,
+            "scale": self.scale,
         }
 
-    def executar(self, valores):
-        valores = np.asarray(
-            valores,
-            dtype=float
-        )
+    def run(self, values):
+        values = np.asarray(values, dtype=np.float64)
 
-        if (
-            len(valores)
-            <= self.config.tamanhoAquecimento
-        ):
+        if len(values) <= self.config.warmupSize:
             raise ValueError(
-                "A série precisa conter valores posteriores "
-                "ao aquecimento."
+                "A série precisa conter valores posteriores ao aquecimento completo."
             )
 
-        valoresAquecimento = valores[
-            :self.config.tamanhoAquecimento
-        ]
+        if np.any(~np.isfinite(values)):
+            raise ValueError("A série contém valores não finitos.")
 
-        resultadoInicial = self.inicializar(
-            valoresAquecimento
-        )
+        self.reset()
 
-        registros = []
+        initialValues = values[:self.config.warmupSize]
+        initialResult = self.initialize(initialValues)
+        records = []
 
-        for indice in range(
-            self.config.tamanhoAquecimento
-        ):
-            mediaLocal = resultadoInicial[
-                "medias"
-            ][indice]
+        for index in range(self.config.driftDepth):
+            value = values[index]
 
-            if resultadoInicial[
-                "mascaraPicos"
-            ][indice]:
-                classificacao = "pico inicial"
-            else:
-                classificacao = (
-                    "aquecimento normal"
-                )
-
-            registros.append({
-                "indice": indice,
-                "valor": valores[indice],
-                "mediaLocal": mediaLocal,
-                "residuo": resultadoInicial[
-                    "residuos"
-                ][indice],
-                "limiarCauda": (
-                    mediaLocal
-                    + self.limiarT
-                ),
-                "limiarExtremo": (
-                    mediaLocal
-                    + self.limiarZq
-                ),
-                "classificacao": classificacao,
-                "fase": "aquecimento",
-                "gamma": self.gamma,
-                "sigma": self.sigma,
-                "zqResidual": self.limiarZq,
-                "atualizouCauda": False
-            })
-
-        for indice in range(
-            self.config.tamanhoAquecimento,
-            len(valores)
-        ):
-            resultado = self.processarValor(
-                valores[indice],
-                indice
+            records.append(
+                {
+                    "index": index,
+                    "value": value,
+                    "phase": "driftWindow",
+                    "classification": "driftInitialization",
+                    "drift": np.nan,
+                    "residual": np.nan,
+                    "initialResidualThresholdBefore": np.nan,
+                    "extremeResidualThresholdBefore": np.nan,
+                    "initialResidualThresholdAfter": np.nan,
+                    "extremeResidualThresholdAfter": np.nan,
+                    "originalInitialThresholdBefore": np.nan,
+                    "originalExtremeThresholdBefore": np.nan,
+                    "originalInitialThresholdAfter": np.nan,
+                    "originalExtremeThresholdAfter": np.nan,
+                    "shape": self.shape,
+                    "scale": self.scale,
+                    "updatedTail": False,
+                }
             )
 
-            registros.append({
-                "indice": indice,
-                "valor": valores[indice],
-                "mediaLocal": resultado[
-                    "mediaLocal"
-                ],
-                "residuo": resultado[
-                    "residuo"
-                ],
-                "limiarCauda": resultado[
-                    "limiarCauda"
-                ],
-                "limiarExtremo": resultado[
-                    "limiarExtremo"
-                ],
-                "classificacao": resultado[
-                    "classificacao"
-                ],
-                "fase": "incremental",
-                "gamma": resultado["gamma"],
-                "sigma": resultado["sigma"],
-                "zqResidual": resultado[
-                    "zqResidual"
-                ],
-                "atualizouCauda": resultado[
-                    "atualizouCauda"
-                ]
-            })
+        calibrationStart = self.config.driftDepth
 
-        self.resultados = pd.DataFrame(
-            registros
-        )
+        for calibrationIndex in range(self.config.calibrationSize):
+            index = calibrationStart + calibrationIndex
+            drift = initialResult["calibrationDrifts"][calibrationIndex]
+            residual = initialResult["calibrationResiduals"][calibrationIndex]
+            isPeak = initialResult["peakMask"][calibrationIndex]
+            classification = "initialPeak" if isPeak else "calibrationNormal"
 
-        return self.resultados
-
-    def historicoAjustesDataFrame(self):
-        return pd.DataFrame(
-            self.historicoAjustes
-        )
-
-    def resumoClassificacoes(self):
-        if self.resultados is None:
-            raise RuntimeError(
-                "Execute o DSPOT antes de solicitar o resumo."
+            records.append(
+                {
+                    "index": index,
+                    "value": values[index],
+                    "phase": "calibration",
+                    "classification": classification,
+                    "drift": drift,
+                    "residual": residual,
+                    "initialResidualThresholdBefore": self.initialResidualThreshold,
+                    "extremeResidualThresholdBefore": self.extremeResidualThreshold,
+                    "initialResidualThresholdAfter": self.initialResidualThreshold,
+                    "extremeResidualThresholdAfter": self.extremeResidualThreshold,
+                    "originalInitialThresholdBefore": drift + self.initialResidualThreshold,
+                    "originalExtremeThresholdBefore": drift + self.extremeResidualThreshold,
+                    "originalInitialThresholdAfter": drift + self.initialResidualThreshold,
+                    "originalExtremeThresholdAfter": drift + self.extremeResidualThreshold,
+                    "shape": self.shape,
+                    "scale": self.scale,
+                    "updatedTail": False,
+                }
             )
+
+        for index in range(self.config.warmupSize, len(values)):
+            result = self.processValue(values[index], index)
+
+            records.append(
+                {
+                    "index": index,
+                    "value": values[index],
+                    "phase": "incremental",
+                    **result,
+                }
+            )
+
+        self.results = pd.DataFrame(records)
+        return self.results
+
+    def getThreshold(self):
+        if not self.ready:
+            return np.nan
+
+        return float(self.currentDrift() + self.extremeResidualThreshold)
+
+    def isReady(self):
+        return bool(self.ready)
+
+    def getAdjustmentHistory(self):
+        return pd.DataFrame(self.adjustmentHistory)
+
+    def getClassificationSummary(self):
+        if self.results is None:
+            raise RuntimeError("Execute o DSPOT antes de solicitar o resumo.")
 
         return (
-            self.resultados[
-                "classificacao"
-            ]
+            self.results["classification"]
             .value_counts()
-            .rename_axis("classificacao")
-            .reset_index(name="quantidade")
+            .rename_axis("classification")
+            .reset_index(name="count")
         )
+
+    def getState(self) -> dict[str, Any]:
+        return {
+            "ready": self.ready,
+            "driftDepth": self.config.driftDepth,
+            "calibrationSize": self.config.calibrationSize,
+            "warmupSize": self.config.warmupSize,
+            "observationCount": self.observationCount,
+            "peakCount": self.peakCount,
+            "shape": self.shape,
+            "scale": self.scale,
+            "initialResidualThreshold": self.initialResidualThreshold,
+            "extremeResidualThreshold": self.extremeResidualThreshold,
+            "threshold": self.getThreshold(),
+            "risk": self.config.risk,
+            "initialQuantile": self.config.initialQuantile,
+            "refitEvery": self.config.refitEvery,
+        }

@@ -1,41 +1,35 @@
 import math
-from typing import Any, Iterable
 
 from src.Anomaly.Thresholds.BaseThreshold import BaseThreshold
 
 
 class FixedThreshold(BaseThreshold):
-    """Limiar constante aplicado após o warmup global do experimento.
-
-    A classe está sempre pronta internamente, mas o pipeline mantém o período
-    global de aquecimento fora da avaliação e do gráfico. Depois do warmup, a
-    predição é ataque quando o score ultrapassa ``value``.
-    """
-
-    def __init__(self, value: float = 0.5):
+    def __init__(self, value=0.5):
         self.initialValue = float(value)
-        if not math.isfinite(self.initialValue):
-            raise ValueError("value deve ser um número finito.")
-        self.currentValue = self.initialValue
 
-    def initialize(self, scores: Iterable[float]) -> None:
+        if not math.isfinite(self.initialValue):
+            raise ValueError("O threshold fixo deve ser um número finito.")
+
+        self.reset()
+
+    def initialize(self, scores=None):
         return None
 
-    def getThreshold(self) -> float:
+    def getThreshold(self):
         return float(self.currentValue)
 
-    def update(self, score: float) -> None:
+    def update(self, score, index=None):
         return None
 
-    def reset(self) -> None:
+    def reset(self):
         self.currentValue = self.initialValue
 
-    def isReady(self) -> bool:
+    def isReady(self):
         return True
 
-    def getState(self) -> dict[str, Any]:
+    def getState(self):
         return {
             "name": "fixed",
-            "threshold": float(self.currentValue),
             "ready": True,
+            "threshold": float(self.currentValue),
         }

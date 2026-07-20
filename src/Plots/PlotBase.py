@@ -1,180 +1,143 @@
-import re
+from collections import OrderedDict
+from pathlib import Path
 
 import matplotlib.patches as mpatches
+import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 
 
 class PlotBase:
-    def __init__(self, target_names):
-        self.target_names = target_names if target_names is not None else ["Normal", "Ataque"]
+    attackColors = ["#f3aaaa", "#abc7ef", "#b9dfc1", "#efd39e", "#d3b8eb", "#efb8d0", "#a9d9d9", "#c8c8a8"]
+    warmupColor = "#c7c7c7"
 
-        self.colors = [
-            "#1f77b4",
-            "#ff7f0e",
-            "#2ca02c",
-            "#d62728",
-            "#9467bd",
-            "#8c564b",
-            "#e377c2",
-        ]
+    def readFrame(self, source):
+        if isinstance(source, pd.DataFrame):
+            return source.copy()
 
-        self.bg_colors = [
-            "#ff4d4d",
-            "#4d88ff",
-            "#2ecc71",
-            "#ffb84d",
-            "#b366ff",
-            "#ff66b3",
-            "#33cccc",
-        ]
+        return pd.read_csv(source)
 
-    def clean_attack_label(self, attack_idx):
-        if attack_idx < len(self.target_names):
-            label = str(self.target_names[attack_idx])
+    def getXAxis(self, frame, column="instanceId"):
+        if column in frame.columns:
+            return pd.to_numeric(frame[column], errors="coerce").to_numpy(dtype=float)
+
+        return np.arange(len(frame), dtype=float)
+
+    def numericSeries(self, values):
+        return pd.to_numeric(values, errors="coerce").to_numpy(dtype=float)
+
+    def addWarmup(self, axis, frame, xValues, showWarmup=True, warmupColumn="isWarmup", alpha=0.20):
+        if not showWarmup or warmupColumn not in frame.columns:
+            return None
+
+        warmupMask = frame[warmupColumn].astype(bool).to_numpy()
+        positions = np.flatnonzero(warmupMask)
+
+        if positions.size == 0:
+            return None
+
+        start = xValues[positions[0]]
+        end = xValues[positions[-1]]
+
+        axis.axvspan(start, end, facecolor=self.warmupColor, edgecolor=self.warmupColor, alpha=alpha, zorder=0)
+        axis.axvline(end, color="#8a8a8a", linewidth=0.9, linestyle=":", alpha=0.65, zorder=3)
+
+        return mpatches.Patch(facecolor=self.warmupColor, edgecolor="#8a8a8a", alpha=alpha, label="Warmup")
+
+    def addAttackRegions(self, axis, attackSource, attackNameColumn="labelName", attackFlagColumn="isAttack", xColumn="instanceId", alpha=0.30):
+        if attackSource is None:
+            return []
+
+        frame = self.readFrame(attackSource)
+
+        if frame.empty or attackFlagColumn not in frame.columns:
+            return []
+
+        xValues = self.getXAxis(frame, xColumn)
+        attackFlags = frame[attackFlagColumn].astype(bool).to_numpy()
+
+        if attackNameColumn in frame.columns:
+            attackNames = frame[attackNameColumn].fillna("Ataque").astype(str).to_numpy()
         else:
-            label = f"Classe {attack_idx}"
+            attackNames = np.full(len(frame), "Ataque")
 
-        label = re.sub(r"(?i)^drdos[_\-\s]*", "", label)
-        label = re.sub(r"(?i)^ddos[_\-\s]*", "", label)
-        label = label.replace("_", " ").strip()
+        regions = []
+        start = None
+        currentName = None
 
-        return label if label else f"Classe {attack_idx}"
+        for position, isAttack in enumerate(attackFlags):
+            attackName = attackNames[position]
 
-    def moving_average(self, values, window_size):
-        values = np.asarray(values, dtype=float)
+            if isAttack and start is None:
+                start = position
+                currentName = attackName
 
-        if values.size == 0:
-            return values
+            elif isAttack and attackName != currentName:
+                regions.append((start, position - 1, currentName))
+                start = position
+                currentName = attackName
 
-        if window_size is None or window_size <= 1:
-            return values.copy()
+            elif not isAttack and start is not None:
+                regions.append((start, position - 1, currentName))
+                start = None
+                currentName = None
 
-        window_size = min(int(window_size), len(values))
-        kernel = np.ones(window_size, dtype=float) / float(window_size)
-        valid = np.convolve(values, kernel, mode="valid")
-        prefix = [np.mean(values[:i + 1]) for i in range(window_size - 1)]
+        if start is not None:
+            regions.append((start, len(frame) - 1, currentName))
 
-        return np.concatenate([np.asarray(prefix, dtype=float), valid])
+        uniqueNames = list(dict.fromkeys(region[2] for region in regions))
+        colorMap = {name: self.attackColors[index % len(self.attackColors)] for index, name in enumerate(uniqueNames)}
 
-    def clean_values(self, values):
-        return np.asarray(
-            [
-                0.0 if value is None or np.isnan(value) else value
-                for value in values
-            ],
-            dtype=float,
-        )
+        for start, end, attackName in regions:
+            axis.axvspan(xValues[start], xValues[end], facecolor=colorMap[attackName], edgecolor=colorMap[attackName], alpha=alpha, zorder=1)
 
-    def expand_y_limits(self, ax, kind="generic"):
-        ymin, ymax = ax.get_ylim()
+        handles = []
 
-        if ymin == ymax:
-            delta = abs(ymax) * 0.1 if ymax != 0 else 1.0
-            ax.set_ylim(ymin - delta, ymax + delta)
-            return
-
-        span = ymax - ymin
-        pad_bottom = 0.03 * span
-
-        if kind == "percent":
-            new_top = ymax + max(5.0, 0.12 * max(abs(ymax), 100.0), 0.15 * span)
-            new_bottom = ymin - max(1.0, pad_bottom)
-
-            if ymax >= 95:
-                new_top = max(new_top, 115.0)
-
-            ax.set_ylim(new_bottom, new_top)
-
-        else:
-            new_bottom = ymin - pad_bottom
-            new_top = ymax + max(0.15 * span, 0.08 * max(abs(ymax), 1.0))
-            ax.set_ylim(new_bottom, new_top)
-
-    def add_attack_regions(
-        self,
-        ax,
-        attack_regions,
-        alpha=0.55,
-        show_legend=True,
-        show_labels=True,
-    ):
-        if not attack_regions:
-            return
-
-        added_attack_labels = set()
-
-        for start, end, attack_idx in attack_regions:
-            attack_name = self.clean_attack_label(attack_idx)
-            bg_color = self.bg_colors[attack_idx % len(self.bg_colors)]
-
-            label_to_show = (
-                attack_name
-                if show_legend and attack_name not in added_attack_labels
-                else ""
-            )
-
-            ax.axvspan(
-                start,
-                end,
-                facecolor=bg_color,
-                alpha=alpha,
-                zorder=1,
-                label=label_to_show,
-            )
-
-            mid = (start + end) / 2
-
-            ax.axvline(
-                mid,
-                color=bg_color,
-                alpha=0.95,
-                linewidth=1.6,
-                zorder=2,
-            )
-
-            if show_labels:
-                ax.text(
-                    mid,
-                    0.89,
-                    attack_name,
-                    transform=ax.get_xaxis_transform(),
-                    ha="center",
-                    va="bottom",
-                    fontsize=11,
-                    fontweight="bold",
-                    color=bg_color,
-                    bbox={
-                        "facecolor": "white",
-                        "edgecolor": "none",
-                        "alpha": 0.65,
-                        "pad": 0.2,
-                    },
-                    clip_on=True,
-                    zorder=10,
-                )
-
-            if label_to_show:
-                added_attack_labels.add(attack_name)
-
-    def add_std_patch_to_legend(self, handles, labels):
-        if "Desvio Padrão" not in labels:
+        for attackName in uniqueNames:
             handles.append(
                 mpatches.Patch(
-                    color="gray",
-                    alpha=0.3,
-                    label="Desvio Padrão",
+                    facecolor=colorMap[attackName],
+                    edgecolor=colorMap[attackName],
+                    alpha=min(0.85, alpha + 0.35),
+                    label=attackName,
                 )
             )
 
-            labels.append("Desvio Padrão")
+        return handles
 
-        return handles, labels
+    def applyLegend(self, axis, handles, columns=8):
+        uniqueHandles = OrderedDict()
 
-    def style_legend_patches(self, legend):
-        if legend is None:
-            return
+        for handle in handles:
+            if handle is not None:
+                uniqueHandles[handle.get_label()] = handle
 
-        for patch in legend.get_patches():
-            patch.set_edgecolor("gray")
-            patch.set_linewidth(1.0)
-            patch.set_alpha(0.8)
+        axis.legend(
+            list(uniqueHandles.values()),
+            list(uniqueHandles.keys()),
+            loc="upper center",
+            bbox_to_anchor=(0.5, -0.12),
+            ncol=max(1, int(columns)),
+            frameon=True,
+            fontsize=10,
+        )
+
+    def finish(self, fig, source, outputPath, defaultName, dpi=160):
+        if outputPath is None:
+            if isinstance(source, pd.DataFrame):
+                outputPath = Path(defaultName)
+            else:
+                outputPath = Path(source).parent / defaultName
+
+        outputPath = Path(outputPath)
+        outputPath.parent.mkdir(parents=True, exist_ok=True)
+
+        fig.savefig(outputPath, dpi=dpi, bbox_inches="tight")
+        plt.close(fig)
+
+        return str(outputPath)
+
+    def styleAxis(self, axis):
+        axis.grid(True, alpha=0.22, linewidth=0.7)
+        axis.spines["top"].set_visible(False)
+        axis.spines["right"].set_visible(False)

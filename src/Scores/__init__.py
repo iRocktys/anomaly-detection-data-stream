@@ -1,1 +1,1 @@
-from src.Scores.ScoreSmoothers import ExponentialScoreSmoother, MovingAverageScoreSmoother, NoScoreSmoother
+from src.Scores.ScoreMovingAverages import ScoreMovingAverages
