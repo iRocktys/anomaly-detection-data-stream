@@ -1,8 +1,6 @@
 import numpy as np
 import pandas as pd
 from capymoa.stream import NumpyStream
-
-
 class DataStreamProcessor:
     def __init__(self, logging=True, selected_features=None, removed_features=None):
         self.logging = logging

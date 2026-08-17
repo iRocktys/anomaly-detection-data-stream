@@ -1,10 +1,7 @@
 from dataclasses import dataclass
-
 import numpy as np
 from scipy.optimize import minimize
-
 from src.Anomaly.Thresholds.BaseThreshold import BaseThreshold
-
 
 @dataclass
 class DspotConfig:
