@@ -51,6 +51,18 @@ class ModelRegistry:
             seedParameter="random_seed",
             loader=lambda: ModelRegistry.loadCapymoaClass("Autoencoder"),
         ),
+        "SRHF": ModelDefinition(
+            code="StreamRHF",
+            displayName="StreamRHF",
+            defaults={
+                "max_height": 5,
+                "num_trees": 100,
+                "window_size": 20,
+                "random_seed": 0,
+            },
+            seedParameter="random_seed",
+            loader=lambda: ModelRegistry.loadCapymoaClass("StreamRHF"),
+        ),
     }
 
     @staticmethod
