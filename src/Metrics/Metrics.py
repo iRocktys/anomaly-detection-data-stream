@@ -30,7 +30,27 @@ class Metrics:
         tn = int(np.sum((trueValues == 0) & (predictedValues == 0)))
         fp = int(np.sum((trueValues == 0) & (predictedValues == 1)))
         fn = int(np.sum((trueValues == 1) & (predictedValues == 0)))
-        total = int(trueValues.size)
+
+        return Metrics.fromCounts(
+            tp=tp,
+            tn=tn,
+            fp=fp,
+            fn=fn,
+        )
+
+    @staticmethod
+    def fromCounts(tp, tn, fp, fn):
+        tp = int(tp)
+        tn = int(tn)
+        fp = int(fp)
+        fn = int(fn)
+
+        if min(tp, tn, fp, fn) < 0:
+            raise ValueError(
+                "Os valores da matriz de confusão não podem ser negativos."
+            )
+
+        total = tp + tn + fp + fn
 
         precision = Metrics.safeDivide(tp, tp + fp)
         recall = Metrics.safeDivide(tp, tp + fn)

@@ -1,4 +1,4 @@
-import math
+from src.Metrics.Metrics import Metrics
 
 
 class IncrementalMetrics:
@@ -20,13 +20,7 @@ class IncrementalMetrics:
         self.fn += fn
         self.instances += 1
 
-        precision = self.safeDivide(self.tp, self.tp + self.fp)
-        recall = self.safeDivide(self.tp, self.tp + self.fn)
-        specificity = self.safeDivide(self.tn, self.tn + self.fp)
-        accuracy = self.safeDivide(self.tp + self.tn, self.instances)
-        f1 = self.safeDivide(2.0 * precision * recall, precision + recall)
-        denominator = math.sqrt((self.tp + self.fp) * (self.tp + self.fn) * (self.tn + self.fp) * (self.tn + self.fn))
-        mcc = self.safeDivide((self.tp * self.tn) - (self.fp * self.fn), denominator)
+        cumulative = self.snapshot()
 
         return {
             "tp": tp,
@@ -37,13 +31,21 @@ class IncrementalMetrics:
             "cumulativeTn": self.tn,
             "cumulativeFp": self.fp,
             "cumulativeFn": self.fn,
-            "cumulativeAccuracy": accuracy,
-            "cumulativePrecision": precision,
-            "cumulativeRecall": recall,
-            "cumulativeSpecificity": specificity,
-            "cumulativeF1": f1,
-            "cumulativeMcc": mcc,
+            "cumulativeAccuracy": cumulative["accuracy"],
+            "cumulativePrecision": cumulative["precision"],
+            "cumulativeRecall": cumulative["recall"],
+            "cumulativeSpecificity": cumulative["specificity"],
+            "cumulativeF1": cumulative["f1"],
+            "cumulativeMcc": cumulative["mcc"],
         }
+
+    def snapshot(self):
+        return Metrics.fromCounts(
+            tp=self.tp,
+            tn=self.tn,
+            fp=self.fp,
+            fn=self.fn,
+        )
 
     def reset(self):
         self.instances = 0
@@ -53,4 +55,4 @@ class IncrementalMetrics:
         self.fn = 0
 
     def safeDivide(self, numerator, denominator):
-        return float(numerator / denominator) if denominator else 0.0
+        return Metrics.safeDivide(numerator, denominator)

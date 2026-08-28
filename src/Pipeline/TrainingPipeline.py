@@ -4,6 +4,10 @@ from src.Anomaly.Models import ModelRegistry
 from src.Data.OnlineImputers import ZeroOnlineImputer
 from src.Data.OnlineNormalizers import NoOnlineNormalizer
 from src.Metrics.IncrementalMetrics import IncrementalMetrics
+from src.Pipeline.ResultContracts import (
+    PipelineRunContext,
+    ResultManagerProtocol,
+)
 from src.Pipeline.ResultManager import ResultManager
 from src.Scores.ScoreMovingAverages import ScoreMovingAverages
 from src.Training.TrainAllStrategy import TrainAllStrategy
@@ -29,6 +33,7 @@ class TrainingPipeline:
         generatePlots=True,
         initialWarmupSize=None,
         thresholdScoreSource="raw",
+        resultManager=None,
     ):
         self.stream = stream
         self.datasetName = str(datasetName)
@@ -69,9 +74,16 @@ class TrainingPipeline:
             1,
             int(metricsWindowSize),
         )
-        self.resultManager = ResultManager(
-            outputPath
+        self.resultManager = (
+            resultManager
+            if resultManager is not None
+            else ResultManager(outputPath)
         )
+        if not isinstance(self.resultManager, ResultManagerProtocol):
+            raise TypeError(
+                "resultManager deve implementar start(context), "
+                "collect(row) e finish()."
+            )
         self.normalClassIndex = int(
             normalClassIndex
         )
@@ -109,7 +121,19 @@ class TrainingPipeline:
         self.stream.restart()
         self.createModel()
 
-        rows = []
+        movingAverageColumns = tuple(
+            f"scoreMa{windowSize}"
+            for windowSize in self.scoreMovingAverages.windowSizes
+        )
+        self.resultManager.start(
+            PipelineRunContext(
+                datasetName=self.datasetName,
+                modelCode=self.modelCode,
+                metricsWindowSize=self.metricsWindowSize,
+                movingAverageColumns=movingAverageColumns,
+                generatePlots=self.generatePlots,
+            )
+        )
         instanceIndex = 0
 
         while self.stream.has_more_instances():
@@ -121,12 +145,11 @@ class TrainingPipeline:
             rawInstance = (
                 self.stream.next_instance()
             )
-            rows.append(
-                self.processInstance(
-                    rawInstance,
-                    instanceIndex,
-                )
+            row = self.processInstance(
+                rawInstance,
+                instanceIndex,
             )
+            self.resultManager.collect(row)
             instanceIndex += 1
 
         if instanceIndex != len(self.labelNames):
@@ -135,20 +158,7 @@ class TrainingPipeline:
                 "de instâncias da stream."
             )
 
-        movingAverageColumns = [
-            f"scoreMa{windowSize}"
-            for windowSize
-            in self.scoreMovingAverages.windowSizes
-        ]
-
-        return self.resultManager.save(
-            rows,
-            self.datasetName,
-            self.modelCode,
-            self.metricsWindowSize,
-            movingAverageColumns,
-            self.generatePlots,
-        )
+        return self.resultManager.finish()
 
     def createModel(self):
         schema = self.getStreamSchema()
