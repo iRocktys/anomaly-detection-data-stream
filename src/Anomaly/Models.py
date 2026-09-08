@@ -1,3 +1,4 @@
+from ProjectDefaults import getModelDefaults
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -16,50 +17,28 @@ class ModelRegistry:
         "AIF": ModelDefinition(
             code="AIF",
             displayName="AdaptiveIsolationForest",
-            defaults={
-                "window_size": 256,
-                "n_trees": 100,
-                "height": None,
-                "m_trees": 10,
-                "weights": 0.5,
-            },
+            defaults=getModelDefaults("AIF"),
             seedParameter="seed",
             loader=lambda: ModelRegistry.loadCapymoaClass("AdaptiveIsolationForest"),
         ),
         "HST": ModelDefinition(
             code="HST",
             displayName="HalfSpaceTrees",
-            defaults={
-                "CLI": None,
-                "window_size": 250,
-                "number_of_trees": 25,
-                "max_depth": 15,
-                "anomaly_threshold": 0.50,
-                "size_limit": 0.10,
-            },
+            defaults=getModelDefaults("HST"),
             seedParameter="random_seed",
             loader=lambda: ModelRegistry.loadCapymoaClass("HalfSpaceTrees"),
         ),
         "AE": ModelDefinition(
             code="AE",
             displayName="Autoencoder",
-            defaults={
-                "hidden_layer": 2,
-                "learning_rate": 0.5,
-                "threshold": 0.60,
-            },
+            defaults=getModelDefaults("AE"),
             seedParameter="random_seed",
             loader=lambda: ModelRegistry.loadCapymoaClass("Autoencoder"),
         ),
         "SRHF": ModelDefinition(
             code="StreamRHF",
             displayName="StreamRHF",
-            defaults={
-                "max_height": 5,
-                "num_trees": 100,
-                "window_size": 20,
-                "random_seed": 0,
-            },
+            defaults=getModelDefaults("SRHF"),
             seedParameter="random_seed",
             loader=lambda: ModelRegistry.loadCapymoaClass("StreamRHF"),
         ),

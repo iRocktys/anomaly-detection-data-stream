@@ -34,7 +34,9 @@ class TrainingPipeline:
         initialWarmupSize=None,
         thresholdScoreSource="raw",
         resultManager=None,
+        strictTrainingErrors=False,
     ):
+        self.strictTrainingErrors = bool(strictTrainingErrors)
         self.stream = stream
         self.datasetName = str(datasetName)
         self.modelCode = ModelRegistry.normalizeCode(modelCode)
@@ -467,6 +469,8 @@ class TrainingPipeline:
             )
             return True
         except ValueError:
+            if self.strictTrainingErrors:
+                raise
             return False
 
     def createModelInstance(

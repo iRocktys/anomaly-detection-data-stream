@@ -1,3 +1,4 @@
+from ProjectDefaults import DEFAULT_DSPOT_PARAMETERS
 from dataclasses import dataclass
 import numpy as np
 from scipy.optimize import minimize
@@ -5,13 +6,13 @@ from src.Anomaly.Thresholds.BaseThreshold import BaseThreshold
 
 @dataclass
 class DspotConfig:
-    driftDepth: int = 50
-    calibrationSize: int = 1000
-    initialQuantile: float = 0.98
-    risk: float = 0.001
-    refitEvery: int = 1
-    optimizationStarts: int = 10
-    tolerance: float = 1e-8
+    driftDepth: int = DEFAULT_DSPOT_PARAMETERS["driftDepth"]
+    calibrationSize: int = DEFAULT_DSPOT_PARAMETERS["calibrationSize"]
+    initialQuantile: float = DEFAULT_DSPOT_PARAMETERS["initialQuantile"]
+    risk: float = DEFAULT_DSPOT_PARAMETERS["risk"]
+    refitEvery: int = DEFAULT_DSPOT_PARAMETERS["refitEvery"]
+    optimizationStarts: int = DEFAULT_DSPOT_PARAMETERS["optimizationStarts"]
+    tolerance: float = DEFAULT_DSPOT_PARAMETERS["tolerance"]
 
     @property
     def warmupSize(self):

@@ -1,17 +1,12 @@
-from src.Optimization.DspotSearchSpace import DspotSearchSpace
+from src.Optimization.AifSearchSpace import AifSearchSpace, AifSearchSpaceConfig
+from src.Optimization.DspotSearchSpace import DspotSearchSpace, DspotSearchSpaceConfig
 from src.Optimization.OptimizationConfig import (
-    DatasetProfile,
-    DspotSearchSpaceConfig,
-    ModelProfile,
-    OptimizationConfig,
+    DatasetProfile, ModelProfile, OptimizationConfig, TrialConfiguration,
 )
 from src.Optimization.OptunaStreamOptimizer import OptunaStreamOptimizer
 
 __all__ = [
-    "DatasetProfile",
-    "DspotSearchSpace",
-    "DspotSearchSpaceConfig",
-    "ModelProfile",
-    "OptimizationConfig",
-    "OptunaStreamOptimizer",
+    "AifSearchSpace", "AifSearchSpaceConfig", "DatasetProfile", "DspotSearchSpace",
+    "DspotSearchSpaceConfig", "ModelProfile", "OptimizationConfig",
+    "TrialConfiguration", "OptunaStreamOptimizer",
 ]

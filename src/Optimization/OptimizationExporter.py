@@ -1,3 +1,8 @@
+"""Persistência dos trials, ranking e exportação das métricas de otimização."""
+from dataclasses import asdict
+from datetime import datetime, timezone
+import json
+import shutil
 import math
 from pathlib import Path
 
@@ -27,6 +32,73 @@ class OptimizationExporter:
     def __init__(self, outputDirectory, topK=10):
         self.outputDirectory = Path(outputDirectory)
         self.topK = max(1, int(topK))
+
+    def preservePreviousExports(self, studies):
+        """Copia exportações de outra busca antes de reutilizar os caminhos públicos."""
+        files = [self.outputDirectory / name for name in ("trials.csv", "top10_windows.csv")]
+        existing = [path for path in files if path.exists()]
+        if not existing:
+            return None
+        currentNames = {study.study_name for study in studies.values()}
+        compatible = True
+        for path in existing:
+            try:
+                frame = pd.read_csv(path, usecols=["studyName"])
+                names = set(frame["studyName"].dropna().astype(str))
+                compatible = compatible and names <= currentNames
+            except (ValueError, pd.errors.EmptyDataError):
+                compatible = False
+        if compatible:
+            return None
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        directory = self.outputDirectory / "archive" / f"previous_export_{timestamp}"
+        directory.mkdir(parents=True, exist_ok=False)
+        for path in existing:
+            shutil.copy2(path, directory / path.name)
+        print(f"CSVs anteriores preservados em: {directory}")
+        return str(directory)
+
+    def recordIdentity(self, trial, scenario, modelCode):
+        for name, value in {
+            "scenario": scenario.name, "dataset": scenario.datasetName,
+            "modelCode": modelCode, "studyName": trial.study.study_name,
+            "samplerSeed": trial.study.user_attrs.get("lastSamplerSeed"),
+        }.items():
+            trial.set_user_attr(name, value)
+
+    def recordConfiguration(self, trial, configuration, optimizationConfig):
+        effective = asdict(configuration)
+        # Mesmo comportamento, mesma assinatura, independentemente de aliases.
+        source = configuration.thresholdScoreSource
+        if source != "raw":
+            source = "scoreMa" + str(source).replace("scoreMa", "").replace("ma", "")
+        effective["thresholdScoreSource"] = source
+        effective.update({
+            "normalizer": optimizationConfig.normalizerName,
+            "normalizerParameters": optimizationConfig.normalizerParameters,
+            "initialWarmupSize": optimizationConfig.initialWarmupSize,
+            "metricsWindowSize": optimizationConfig.metricsWindowSize,
+            "trainingStrategy": "all",
+        })
+        trial.set_user_attr("effectiveConfiguration", effective)
+        trial.set_user_attr("modelParameters", dict(configuration.modelParameters))
+        for name in ("thresholdScoreSource", "calibrationSize", "optimizationStarts", "tolerance"):
+            trial.set_user_attr(name, effective[name])
+        for name in ("initialWarmupSize", "metricsWindowSize", "normalizer"):
+            trial.set_user_attr(name, effective[name])
+
+    def recordResult(self, trial, result):
+        metrics = result.streamMetrics
+        if not math.isfinite(float(metrics["f1"])):
+            raise ValueError("O trial produziu um F1 não finito.")
+        countNames = {"tp", "tn", "fp", "fn", "evaluatedInstances", "benignInstances", "attackInstances"}
+        for name in self.globalMetricNames:
+            value = int(metrics[name]) if name in countNames else float(metrics[name])
+            trial.set_user_attr(name, value)
+        trial.set_user_attr("windowCounts", [
+            [int(window[name]) for name in ("windowIndex", "windowStart", "windowEnd", "tp", "tn", "fp", "fn")]
+            for window in result.windowMetrics
+        ])
 
     def export(self, studies):
         self.outputDirectory.mkdir(parents=True, exist_ok=True)
@@ -71,8 +143,22 @@ class OptimizationExporter:
 
         trialsPath = self.outputDirectory / "trials.csv"
         windowsPath = self.outputDirectory / "top10_windows.csv"
-        self._writeCsv(pd.DataFrame(trialRows), trialsPath)
-        self._writeCsv(pd.DataFrame(windowRows), windowsPath)
+        trialFrame = pd.DataFrame(trialRows)
+        windowFrame = pd.DataFrame(windowRows)
+        # CSVs vazios continuam legíveis pelo notebook (inclusive se todos falharem).
+        if trialFrame.empty:
+            trialFrame = pd.DataFrame(columns=[
+                "scenario", "studyName", "trialNumber", "state", "objectiveF1", "bestF1SoFar",
+                "rank", "isTop10", "dataset", "modelCode", *self.globalMetricNames,
+            ])
+        if windowFrame.empty:
+            windowFrame = pd.DataFrame(columns=[
+                "scenario", "studyName", "modelCode", "rank", "trialNumber", "globalF1",
+                "windowIndex", "windowStart", "windowEnd", "tp", "tn", "fp", "fn", "f1",
+                "cumulativeInstances", "cumulativeF1",
+            ])
+        self._writeCsv(trialFrame, trialsPath)
+        self._writeCsv(windowFrame, windowsPath)
         return {
             "trialsPath": str(trialsPath),
             "top10WindowsPath": str(windowsPath),
@@ -86,9 +172,11 @@ class OptimizationExporter:
         rank = 0
 
         for trial in ordered:
-            signature = tuple(
-                (name, repr(value))
-                for name, value in sorted(trial.params.items())
+            signature = json.dumps(
+                trial.user_attrs.get("effectiveConfiguration", {
+                    "params": trial.params,
+                    "modelParameters": trial.user_attrs.get("modelParameters", {}),
+                }), sort_keys=True, default=str,
             )
             if signature in signatures:
                 continue
@@ -134,6 +222,12 @@ class OptimizationExporter:
             "calibrationSize": attrs.get("calibrationSize"),
             "optimizationStarts": attrs.get("optimizationStarts"),
             "tolerance": attrs.get("tolerance"),
+            "initialWarmupSize": attrs.get("initialWarmupSize"),
+            "metricsWindowSize": attrs.get("metricsWindowSize"),
+            "normalizer": attrs.get("normalizer"),
+            "samplerSeed": attrs.get("samplerSeed"),
+            "errorType": attrs.get("errorType"),
+            "errorMessage": attrs.get("errorMessage"),
         }
         for name in self.globalMetricNames:
             row[name] = attrs.get(name)
@@ -176,6 +270,9 @@ class OptimizationExporter:
             rows.append(
                 {
                     "scenario": scenario,
+                    "studyName": trial.user_attrs.get("studyName"),
+                    "modelCode": trial.user_attrs.get("modelCode"),
+                    "dataset": trial.user_attrs.get("dataset"),
                     "rank": int(rank),
                     "trialNumber": int(trial.number),
                     "globalF1": float(trial.value),
