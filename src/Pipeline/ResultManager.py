@@ -213,8 +213,6 @@ class ResultManager:
             .replace("_", "")
             .replace("-", "")
         )
-        if value == "zero":
-            return "ZERO"
         if value in {"incrementalmean", "mean", "media", "média"}:
             return "MEAN"
         return value.upper()

@@ -11,8 +11,8 @@ import pandas as pd
 
 from src.Anomaly.Models import ModelRegistry
 from src.Anomaly.Thresholds.Incremental.DspotThreshold import DspotConfig, DspotThreshold
-from src.Data.OnlineImputers import IncrementalMeanImputer, ZeroOnlineImputer
-from src.Data.OnlineNormalizers import IncrementalZScoreNormalizer, NoOnlineNormalizer
+from src.Data.OnlineImputers import IncrementalMeanImputer
+from src.Data.OnlineNormalizers import IncrementalZScoreNormalizer
 from src.Optimization.AifSearchSpace import AifSearchSpace
 from src.Optimization.DspotSearchSpace import DspotSearchSpace
 from src.Optimization.OptimizationConfig import DatasetProfile, ModelProfile, OptimizationConfig, PreparedScenario
@@ -30,7 +30,7 @@ class OptunaStreamOptimizer:
         "generalizacao": "Generalization", "generalization": "Generalization",
         "recorrencia": "Recurrence", "recurrence": "Recurrence",
     }
-    imputerFactories = {"zero": ZeroOnlineImputer, "incrementalMean": IncrementalMeanImputer}
+    imputerFactories = {"incrementalMean": IncrementalMeanImputer}
 
     def __init__(self, config=None, datasetProfile=None, modelProfile=None,
                  searchSpace=None, modelSearchSpace=None):
@@ -44,7 +44,6 @@ class OptunaStreamOptimizer:
                 self.modelSearchSpace = AifSearchSpace(self.config.aifSearchSpace)
         if not self.config.optimizeModelParameters:
             self.modelSearchSpace = None
-        # Uso explícito do espaço antigo conserva a seleção de imputação dele.
         self._explicitSearchSpace = searchSpace is not None
         self._validateConfiguration()
 
@@ -157,15 +156,15 @@ class OptunaStreamOptimizer:
         if self._explicitSearchSpace:
             configuration = self.searchSpace.suggest(trial)
         else:
-            imputer = trial.suggest_categorical("imputer", list(self.config.imputerNames))
-            configuration = self.searchSpace.suggest(trial, imputerName=imputer)
+            configuration = self.searchSpace.suggest(
+                trial,
+                imputerName="incrementalMean",
+            )
         if configuration.calibrationWindow > self.config.initialWarmupSize:
             raise ValueError("A calibração do trial ultrapassa o warm-up.")
         return replace(configuration, modelParameters=parameters)
 
     def _makeNormalizer(self):
-        if self.config.normalizerName == "none":
-            return NoOnlineNormalizer()
         return IncrementalZScoreNormalizer(**self.config.normalizerParameters)
 
     def _createPipeline(self, scenario, configuration):

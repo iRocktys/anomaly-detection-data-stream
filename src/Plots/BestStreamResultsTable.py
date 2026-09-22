@@ -657,9 +657,6 @@ class BestStreamResultsTable:
     def formatImputer(self, value):
         normalized = self.normalizeToken(value)
 
-        if normalized == "zero":
-            return "Zero"
-
         if normalized in [
             "incrementalmean",
             "mean",

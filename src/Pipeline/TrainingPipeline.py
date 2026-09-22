@@ -1,8 +1,8 @@
 import numpy as np
 
 from src.Anomaly.Models import ModelRegistry
-from src.Data.OnlineImputers import ZeroOnlineImputer
-from src.Data.OnlineNormalizers import NoOnlineNormalizer
+from src.Data.OnlineImputers import IncrementalMeanImputer
+from src.Data.OnlineNormalizers import IncrementalZScoreNormalizer
 from src.Metrics.IncrementalMetrics import IncrementalMetrics
 from src.Pipeline.ResultContracts import (
     PipelineRunContext,
@@ -46,12 +46,12 @@ class TrainingPipeline:
         self.imputer = (
             imputer
             if imputer is not None
-            else ZeroOnlineImputer()
+            else IncrementalMeanImputer()
         )
         self.normalizer = (
             normalizer
             if normalizer is not None
-            else NoOnlineNormalizer()
+            else IncrementalZScoreNormalizer()
         )
         self.trainingStrategy = (
             trainingStrategy
@@ -713,12 +713,6 @@ class TrainingPipeline:
             .__class__
             .__name__
         )
-
-        if (
-            normalizerName
-            == "NoOnlineNormalizer"
-        ):
-            return "none"
 
         if (
             normalizerName

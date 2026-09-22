@@ -22,22 +22,6 @@ class BaseOnlineImputer:
         return preparedValues.copy()
 
 
-class ZeroOnlineImputer(BaseOnlineImputer):
-    name = "zero"
-
-    def transform(self, values):
-        imputedValues = self.prepareValues(values)
-        imputedValues[~np.isfinite(imputedValues)] = 0.0
-
-        return imputedValues
-
-    def update(self, values):
-        self.prepareValues(values)
-
-    def reset(self):
-        return None
-
-
 class IncrementalMeanImputer(BaseOnlineImputer):
     name = "incrementalMean"
 

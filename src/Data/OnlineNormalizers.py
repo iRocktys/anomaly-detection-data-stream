@@ -41,10 +41,6 @@ class BaseOnlineNormalizer:
         return preparedMask
 
 
-class NoOnlineNormalizer(BaseOnlineNormalizer):
-    pass
-
-
 class IncrementalZScoreNormalizer(BaseOnlineNormalizer):
     def __init__(self, epsilon=1e-8, clip=None):
         super().__init__(epsilon)

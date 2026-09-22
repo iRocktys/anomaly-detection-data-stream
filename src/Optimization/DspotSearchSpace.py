@@ -1,8 +1,4 @@
-"""Limites experimentais do DSPOT e da fonte de score.
-
-imputerNames é mantido para compatibilidade com o uso direto deste espaço.
-O otimizador padrão seleciona a imputação por OptimizationConfig.imputerNames.
-"""
+"""Limites experimentais do DSPOT e da fonte de score."""
 from dataclasses import dataclass
 from numbers import Integral
 import math
@@ -44,8 +40,8 @@ class DspotSearchSpaceConfig:
             raise ValueError("driftDepthMinimum deve ser >= 2.")
         if not math.isfinite(self.tolerance):
             raise ValueError("tolerance deve ser finita.")
-        if not set(self.imputerNames) <= {"zero", "incrementalMean"}:
-            raise ValueError("Imputador inválido no espaço de busca.")
+        if self.imputerNames != ("incrementalMean",):
+            raise ValueError("O único imputador aceito é incrementalMean.")
         if not set(self.scoreModes) <= {"raw", "movingAverage"}:
             raise ValueError("Fonte de score inválida no espaço de busca.")
         if not self.imputerNames or not self.scoreModes:
@@ -103,7 +99,7 @@ class DspotSearchSpace:
         from src.Optimization.OptimizationConfig import TrialConfiguration
 
         if imputerName is None:
-            imputerName = trial.suggest_categorical("imputer", list(self.config.imputerNames))
+            imputerName = "incrementalMean"
         scoreMode = trial.suggest_categorical(
             "scoreMode",
             list(self.config.scoreModes),

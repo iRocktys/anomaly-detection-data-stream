@@ -74,10 +74,10 @@ class OptimizationConfig:
                 raise ValueError(f"{name} deve ser inteiro maior que zero.")
         if not self.scenarios or len(set(self.scenarios)) != len(self.scenarios):
             raise ValueError("Informe cenários distintos para otimização.")
-        if not self.imputerNames or not set(self.imputerNames) <= {"zero", "incrementalMean"}:
-            raise ValueError("Imputadores aceitos: zero e incrementalMean.")
-        if self.normalizerName not in ("incrementalZScore", "none"):
-            raise ValueError("Normalizador aceito: incrementalZScore ou none.")
+        if self.imputerNames != ("incrementalMean",):
+            raise ValueError("O único imputador aceito é incrementalMean.")
+        if self.normalizerName != "incrementalZScore":
+            raise ValueError("O único normalizador aceito é incrementalZScore.")
         if not isinstance(self.aifSearchSpace, AifSearchSpaceConfig) or not isinstance(self.dspotSearchSpace, DspotSearchSpaceConfig):
             raise TypeError("Utilize AifSearchSpaceConfig e DspotSearchSpaceConfig nos espaços de busca.")
         if self.dspotSearchSpace.calibrationWindowMaximum > self.initialWarmupSize:
