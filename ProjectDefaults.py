@@ -64,11 +64,18 @@ DEFAULT_MODEL_PARAMETERS = {
 DEFAULT_TARGET_COLUMN = "Label"
 DEFAULT_BINARY_LABEL = True
 DEFAULT_NORMAL_CLASS_INDEX = 0
-DEFAULT_DATA_ROOT = Path("data/15k")
-DEFAULT_OUTPUT_ROOT = Path("output")
-DEFAULT_OPTIMIZATION_OUTPUT_ROOT = DEFAULT_OUTPUT_ROOT / "Optimization"
+
+# DEFAULT_DATA_ROOT = Path("data/attack scenario 15k")
+# DEFAULT_SCENARIOS = ("Adaptation", "Consistency", "Generalization", "Recurrence")
+# DEFAULT_DATASET_SCENARIOS = ("Adaptação", "Consistência", "Generalização", "Recorrência")
+
+DEFAULT_DATA_ROOT = Path("data/attack window")
 DEFAULT_SCENARIOS = ("Adaptation", "Consistency", "Generalization", "Recurrence")
 DEFAULT_DATASET_SCENARIOS = ("Adaptação", "Consistência", "Generalização", "Recorrência")
+
+
+DEFAULT_OUTPUT_ROOT = Path("output")
+DEFAULT_OPTIMIZATION_OUTPUT_ROOT = DEFAULT_OUTPUT_ROOT / "Optimization"
 DEFAULT_ATTACK_SCALES = (25, 200, 1000)
 DEFAULT_OPTIMIZATION_BLOCK_SIZE = 200
 DEFAULT_INITIAL_WARMUP_SIZE = 2000
