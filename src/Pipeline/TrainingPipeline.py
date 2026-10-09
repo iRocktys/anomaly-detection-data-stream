@@ -114,6 +114,12 @@ class TrainingPipeline:
             - self.thresholdCalibrationWindowSize
         )
 
+        self.modelWarmupSize = (
+            self.thresholdCalibrationStart
+        )
+
+        self.validateWarmupProtocol()
+
         self.thresholdWarmupScores = []
         self.modelName = None
         self.model = None
@@ -349,6 +355,12 @@ class TrainingPipeline:
             "warmup": (
                 self.initialWarmupSize
             ),
+            "modelWarmup": (
+                self.modelWarmupSize
+            ),
+            "thresholdWarmup": (
+                self.thresholdCalibrationWindowSize
+            ),
             "isWarmup": int(
                 isWarmup
             ),
@@ -560,6 +572,36 @@ class TrainingPipeline:
             )
 
         return initialWarmupSize
+
+    def validateWarmupProtocol(self):
+        # Valida o encaixe da janela do AIF na fase anterior à calibração do threshold.
+        if self.modelWarmupSize < 0:
+            raise ValueError(
+                "O warm-up exclusivo do modelo não pode ser negativo."
+            )
+
+        if self.modelCode == "AIF":
+            definition = (
+                ModelRegistry
+                .definitions[
+                    "AIF"
+                ]
+            )
+
+            windowSize = int(
+                self.modelParameters.get(
+                    "window_size",
+                    definition.defaults[
+                        "window_size"
+                    ],
+                )
+            )
+
+            if windowSize > self.modelWarmupSize:
+                raise ValueError(
+                    "A janela do AIF não pode superar a fase de warm-up "
+                    f"do modelo ({self.modelWarmupSize})."
+                )
 
     def normalizeThresholdScoreSource(
         self,

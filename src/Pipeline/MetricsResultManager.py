@@ -81,6 +81,18 @@ class MetricsResultManager:
             "thresholdScoreLabel": str(first["thresholdScoreLabel"]),
             "evaluationName": str(first["evaluationName"]),
             "warmup": int(first["warmup"]),
+            "modelWarmup": int(
+                first.get(
+                    "modelWarmup",
+                    first["thresholdCalibrationStart"],
+                )
+            ),
+            "thresholdWarmup": int(
+                first.get(
+                    "thresholdWarmup",
+                    first["thresholdCalibrationWindow"],
+                )
+            ),
             "thresholdCalibrationWindow": int(
                 first["thresholdCalibrationWindow"]
             ),
