@@ -2,8 +2,8 @@ from pathlib import Path
 
 import pandas as pd
 
-from src.Scenario.data_loader import iter_prepared_chunks
-from src.Scenario.windowing import create_windows_chunked
+from src.data_loader import iter_prepared_chunks
+from src.windowing import create_windows_chunked
 
 
 def build_benign_baseline(
@@ -14,7 +14,6 @@ def build_benign_baseline(
     attack_ratio_threshold,
     chunk_size=100_000,
 ):
-    # Constrói o baseline com todas as janelas benignas disponíveis nos arquivos informados.
     collected = []
 
     for file_name in source_files:
@@ -24,7 +23,6 @@ def build_benign_baseline(
         )
 
         def benign_chunks():
-            # Filtra cada lote preparado para manter somente fluxos originalmente benignos.
             for chunk in iter_prepared_chunks(
                 path,
                 window,
@@ -61,7 +59,7 @@ def build_benign_baseline(
 
     if not collected:
         raise RuntimeError(
-            "No BENIGN window was found."
+            "Nenhuma janela BENIGN foi encontrada."
         )
 
     baseline = pd.concat(
@@ -69,6 +67,8 @@ def build_benign_baseline(
         ignore_index=True,
     )
 
+    # Nova linha temporal sintética contínua usando TODAS as
+    # janelas benignas disponíveis.
     baseline[
         "Timestamp"
     ] = pd.date_range(

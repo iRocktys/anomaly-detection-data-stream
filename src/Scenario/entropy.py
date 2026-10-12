@@ -2,7 +2,6 @@ import numpy as np
 
 
 def shannon_entropy(values):
-    # Calcula a entropia de Shannon da distribuição dos valores observados.
     counts = (
         values
         .dropna()
@@ -33,7 +32,6 @@ def shannon_entropy(values):
 def calculate_entropies(
     started_flows,
 ):
-    # Calcula somente as entropias configuradas para identificadores e protocolo da janela.
     columns = {
         "Source_IP":
             "SourceIPEntropy",

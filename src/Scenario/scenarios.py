@@ -4,14 +4,13 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from src.Scenario.attack_blocks import prepare_attack_segments
+from src.attack_blocks import prepare_attack_segments
 
 
 def split_baseline(
     baseline,
     parts,
 ):
-    # Divide o baseline benigno em partes ordenadas para intercalar os blocos de ataque.
     indices = np.array_split(
         np.arange(
             len(baseline)
@@ -30,7 +29,6 @@ def split_baseline(
 def required_attack_segments(
     scenarios,
 ):
-    # Calcula quantas ocorrências de cada ataque são exigidas pelo conjunto de cenários.
     required = Counter()
 
     for sequence in scenarios.values():
@@ -52,7 +50,6 @@ def prepare_scenario_attack_segments(
     scenarios,
     preferred_duration,
 ):
-    # Prepara todos os segmentos de ataque necessários para montar os cenários configurados.
     required = required_attack_segments(
         scenarios
     )
@@ -94,7 +91,6 @@ def build_scenario(
     output_path,
     window,
 ):
-    # Intercala baseline e ataques, gera uma linha temporal contínua e exporta dataset e manifesto.
     benign_parts = split_baseline(
         baseline,
         len(sequence) + 1,
@@ -146,8 +142,7 @@ def build_scenario(
         ignore_index=True,
     )
 
-    scenario["ScenarioName"] = scenario_name
-
+    # Nova linha temporal contínua do cenário.
     scenario[
         "Timestamp"
     ] = pd.date_range(
@@ -163,8 +158,6 @@ def build_scenario(
         "SourceFile",
         "AttackBlock",
         "ScenarioPart",
-        "ScenarioName",
-        "AttackType",
     ]
 
     final_columns = [
@@ -195,12 +188,10 @@ def build_scenario(
         column
         for column in [
             "Timestamp",
-            "ScenarioName",
             "ScenarioPart",
             "OriginalTimestamp",
             "SourceFile",
             "AttackBlock",
-            "AttackType",
         ]
         if column in scenario.columns
     ]

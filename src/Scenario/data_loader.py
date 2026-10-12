@@ -5,7 +5,6 @@ import pandas as pd
 
 
 def clean_column_name(name):
-    # Normaliza um nome de coluna para o padrão alfanumérico usado pelo backend.
     name = str(name).strip()
     name = re.sub(
         r"[^A-Za-z0-9]+",
@@ -16,7 +15,6 @@ def clean_column_name(name):
 
 
 def canonical_label(series):
-    # Normaliza os rótulos originais para nomes consistentes dos ataques e do tráfego benigno.
     labels = (
         series
         .astype(str)
@@ -46,7 +44,6 @@ def canonical_label(series):
 
 
 def normalize_columns(data):
-    # Aplica a normalização padronizada a todos os nomes de colunas do DataFrame.
     data = data.copy()
 
     data.columns = [
@@ -61,7 +58,6 @@ def prepare_flows(
     data,
     window,
 ):
-    # Prepara timestamps, duração, janela de início e rótulo canônico dos fluxos carregados.
     data = normalize_columns(
         data
     )
@@ -119,7 +115,6 @@ def load_sample(
     sample_rows,
     window,
 ):
-    # Carrega e prepara uma amostra limitada do CSV para validações rápidas.
     skip_rows = (
         range(
             1,
@@ -157,7 +152,6 @@ def iter_prepared_chunks(
     window,
     chunk_size=100_000,
 ):
-    # Percorre o CSV em lotes e devolve cada lote já preparado para o janelamento.
     for chunk in pd.read_csv(
         csv_path,
         chunksize=chunk_size,

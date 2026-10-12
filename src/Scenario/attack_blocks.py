@@ -2,8 +2,8 @@ from pathlib import Path
 
 import pandas as pd
 
-from src.Scenario.data_loader import iter_prepared_chunks
-from src.Scenario.windowing import create_windows_chunked
+from src.data_loader import iter_prepared_chunks
+from src.windowing import create_windows_chunked
 
 
 def find_attack_interval(
@@ -11,7 +11,6 @@ def find_attack_interval(
     window,
     chunk_size=100_000,
 ):
-    # Localiza o primeiro e o último fluxo de ataque sem carregar o arquivo inteiro em memória.
     first_attack = None
     last_attack = None
 
@@ -50,7 +49,7 @@ def find_attack_interval(
 
     if first_attack is None:
         raise RuntimeError(
-            f"No attack was found in {csv_path}."
+            f"Nenhum ataque encontrado em {csv_path}."
         )
 
     return (
@@ -67,7 +66,6 @@ def build_attack_block(
     attack_ratio_threshold,
     chunk_size=100_000,
 ):
-    # Constrói o bloco janelado de um ataque entre sua primeira e última ocorrência reais.
     first_attack, last_attack = find_attack_interval(
         csv_path,
         window,
@@ -75,7 +73,6 @@ def build_attack_block(
     )
 
     def interval_chunks():
-        # Itera somente os fluxos contidos no intervalo temporal real do ataque.
         for chunk in iter_prepared_chunks(
             csv_path,
             window,
@@ -123,7 +120,6 @@ def attack_block_info(
     attack_block,
     attack_name,
 ):
-    # Resume duração e quantidade de janelas do bloco de ataque informado.
     block = attack_block.copy()
 
     block["OriginalTimestamp"] = pd.to_datetime(
@@ -173,7 +169,6 @@ def _extract_segment(
     start,
     duration,
 ):
-    # Extrai um intervalo temporal contíguo de um bloco de ataque.
     end = (
         start + duration
     )
@@ -198,7 +193,6 @@ def prepare_attack_segments(
     required_count,
     preferred_duration,
 ):
-    # Cria os segmentos necessários e repete o bloco somente quando a duração real é insuficiente.
     block = attack_block.copy()
 
     block["OriginalTimestamp"] = pd.to_datetime(
@@ -223,6 +217,7 @@ def prepare_attack_segments(
         "OriginalTimestamp"
     ].max()
 
+    # + 1 segundo para representar a extensão da última janela.
     available_duration = (
         last_timestamp
         - first_timestamp
@@ -233,6 +228,7 @@ def prepare_attack_segments(
         preferred_duration
     )
 
+    # O bloco canônico nunca é maior que o tempo realmente disponível.
     canonical_duration = min(
         preferred_duration,
         available_duration,
@@ -246,6 +242,8 @@ def prepare_attack_segments(
     segments = []
     strategy = None
 
+    # Caso 1:
+    # há duração suficiente para gerar todos os blocos sem repetição.
     if (
         available_duration
         >= required_total_duration
@@ -265,7 +263,7 @@ def prepare_attack_segments(
 
             if len(piece) == 0:
                 raise RuntimeError(
-                    f"{attack_name}: segmento {index + 1} is empty."
+                    f"{attack_name}: segmento {index + 1} ficou vazio."
                 )
 
             segments.append(
@@ -277,6 +275,8 @@ def prepare_attack_segments(
                 + canonical_duration
             )
 
+    # Caso 2:
+    # o ataque é curto. Um único bloco real é criado e reutilizado.
     else:
         strategy = "repeat"
 
@@ -288,7 +288,7 @@ def prepare_attack_segments(
 
         if len(canonical) == 0:
             raise RuntimeError(
-                f"{attack_name}: canonical block is empty."
+                f"{attack_name}: bloco canônico vazio."
             )
 
         for _ in range(

@@ -4,7 +4,7 @@ import numpy as np
 from scipy.optimize import minimize
 
 from ProjectDefaults import DEFAULT_DSPOT_PARAMETERS
-from src.Thresholds.BaseThreshold import BaseThreshold
+from Thresholds.BaseThreshold import BaseThreshold
 
 
 class DspotCalibrationError(ValueError):
@@ -30,37 +30,37 @@ class DspotConfig:
         # Valida somente combinações matematicamente permitidas pelo DSPOT.
         if self.driftDepth < 2:
             raise ValueError(
-                "driftDepth must be greater than or equal to 2."
+                "driftDepth deve ser maior ou igual a 2."
             )
 
         if self.calibrationSize < 20:
             raise ValueError(
-                "calibrationSize must be greater than or equal to 20."
+                "calibrationSize deve ser maior ou igual a 20."
             )
 
         if not 0.5 < self.initialQuantile < 1.0:
             raise ValueError(
-                "initialQuantile must be in the interval (0.5, 1)."
+                "initialQuantile deve estar no intervalo (0.5, 1)."
             )
 
         if not 0.0 < self.risk < 1.0:
             raise ValueError(
-                "risk must be in the interval (0, 1)."
+                "risk deve estar no intervalo (0, 1)."
             )
 
         if self.refitEvery < 1:
             raise ValueError(
-                "refitEvery must be greater than or equal to 1."
+                "refitEvery deve ser maior ou igual a 1."
             )
 
         if self.optimizationStarts < 2:
             raise ValueError(
-                "optimizationStarts must be greater than or equal to 2."
+                "optimizationStarts deve ser maior ou igual a 2."
             )
 
         if self.tolerance <= 0:
             raise ValueError(
-                "tolerance must be greater than zero."
+                "tolerance deve ser maior que zero."
             )
 
 
@@ -84,8 +84,8 @@ class DspotThreshold(BaseThreshold):
 
         if len(values) != self.config.warmupSize:
             raise ValueError(
-                "DSPOT must receive exactly "
-                f"{self.config.warmupSize} warm-up scores."
+                "O DSPOT deve receber exatamente "
+                f"{self.config.warmupSize} scores no aquecimento."
             )
 
         if np.any(
@@ -94,7 +94,7 @@ class DspotThreshold(BaseThreshold):
             )
         ):
             raise DspotCalibrationError(
-                "The DSPOT warm-up contains non-finite scores."
+                "O aquecimento do DSPOT contém scores não finitos."
             )
 
         driftValues = values[
@@ -156,7 +156,7 @@ class DspotThreshold(BaseThreshold):
 
         if self.peakCount < 3:
             raise DspotCalibrationError(
-                "DSPOT found fewer than three peaks during calibration."
+                "O DSPOT encontrou menos de três picos durante a calibração."
             )
 
         try:
@@ -165,7 +165,7 @@ class DspotThreshold(BaseThreshold):
             raise
         except Exception as error:
             raise DspotCalibrationError(
-                f"Failed to fit the initial DSPOT tail: {error}"
+                f"Falha ao ajustar a cauda inicial do DSPOT: {error}"
             ) from error
 
         self.ready = True
@@ -184,7 +184,7 @@ class DspotThreshold(BaseThreshold):
         # Atualiza drift e cauda incrementalmente após a calibração inicial.
         if not self.ready:
             raise RuntimeError(
-                "DSPOT has not been initialized yet."
+                "O DSPOT ainda não foi inicializado."
             )
 
         score = float(
@@ -195,7 +195,7 @@ class DspotThreshold(BaseThreshold):
             score
         ):
             raise ValueError(
-                "DSPOT accepts only finite scores."
+                "O DSPOT aceita somente scores finitos."
             )
 
         drift = self.calculateDrift()
@@ -353,7 +353,7 @@ class DspotThreshold(BaseThreshold):
 
         if len(excesses) < 3:
             raise DspotCalibrationError(
-                "There are not enough excesses to fit the GPD distribution."
+                "Não existem excessos suficientes para ajustar a distribuição GPD."
             )
 
         candidates = []
@@ -371,7 +371,7 @@ class DspotThreshold(BaseThreshold):
             or exponentialScale <= 0
         ):
             raise DspotCalibrationError(
-                "The initial GPD scale is invalid."
+                "A escala inicial da GPD é inválida."
             )
 
         exponentialLikelihood = self.logLikelihood(
@@ -564,7 +564,7 @@ class DspotThreshold(BaseThreshold):
 
         if not candidates:
             raise DspotCalibrationError(
-                "No valid GPD fit was found."
+                "Nenhum ajuste válido da GPD foi encontrado."
             )
 
         (
@@ -586,7 +586,7 @@ class DspotThreshold(BaseThreshold):
 
         if ratio <= 0:
             raise DspotCalibrationError(
-                "The ratio used in the DSPOT extreme threshold is invalid."
+                "A razão usada no limiar extremo do DSPOT é inválida."
             )
 
         if np.isclose(
@@ -628,7 +628,7 @@ class DspotThreshold(BaseThreshold):
             )
         ):
             raise DspotCalibrationError(
-                "The DSPOT fit produced invalid values."
+                "O ajuste do DSPOT produziu valores inválidos."
             )
 
     def grimshawFunction(self, value, excesses):

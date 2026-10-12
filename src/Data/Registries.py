@@ -8,14 +8,14 @@ class NoOnlineImputer:
     name = "none"
 
     def transform(self, values):
-        # Retorna os valores sem imputação e rejeita qualquer entrada não finita.
-        prepared_values = np.asarray(values, dtype=np.float64).copy()
-        if np.any(~np.isfinite(prepared_values)):
-            raise ValueError("The 'none' imputer received missing or non-finite values.")
-        return prepared_values
+        # Retorna os valores sem imputação e rejeita dados ausentes antes do modelo.
+        prepared = np.asarray(values, dtype=np.float64).copy()
+        if np.any(~np.isfinite(prepared)):
+            raise ValueError("O imputador 'none' recebeu valores ausentes ou não finitos.")
+        return prepared
 
     def update(self, values):
-        # Mantém a interface incremental sem modificar estado.
+        # Mantém a interface incremental sem atualizar estado.
         return None
 
     def reset(self):
@@ -27,7 +27,7 @@ class NoOnlineNormalizer(BaseOnlineNormalizer):
     name = "none"
 
     def transform(self, values):
-        # Retorna os valores sem normalização depois de validar que são finitos.
+        # Retorna os valores sem normalização após validar finitude.
         return self.prepareValues(values)
 
 
@@ -39,10 +39,10 @@ class ImputerRegistry:
 
     @classmethod
     def create(cls, name, parameters=None):
-        # Cria o imputador configurado a partir de um nome textual normalizado.
+        # Cria um imputador a partir de um nome textual e parâmetros opcionais.
         key = str(name).strip().lower().replace("_", "").replace("-", "")
         if key not in cls.factories:
-            raise ValueError(f"Unknown imputer: {name}. Available: {sorted(cls.factories)}")
+            raise ValueError(f"Imputador desconhecido: {name}. Disponíveis: {sorted(cls.factories)}")
         return cls.factories[key](**dict(parameters or {}))
 
 
@@ -54,8 +54,8 @@ class NormalizerRegistry:
 
     @classmethod
     def create(cls, name, parameters=None):
-        # Cria o normalizador configurado a partir de um nome textual normalizado.
+        # Cria um normalizador a partir de um nome textual e parâmetros opcionais.
         key = str(name).strip().lower().replace("_", "").replace("-", "")
         if key not in cls.factories:
-            raise ValueError(f"Unknown normalizer: {name}. Available: {sorted(cls.factories)}")
+            raise ValueError(f"Normalizador desconhecido: {name}. Disponíveis: {sorted(cls.factories)}")
         return cls.factories[key](**dict(parameters or {}))

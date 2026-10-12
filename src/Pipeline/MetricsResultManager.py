@@ -7,7 +7,6 @@ from src.Pipeline.ResultContracts import MetricsRunResult, PipelineRunContext
 
 class MetricsResultManager:
     def __init__(self):
-        # Inicializa um coletor leve usado durante otimizações sem gravar artefatos por trial.
         self.context = None
         self.globalMetrics = IncrementalMetrics()
         self.windowMetrics = IncrementalMetrics()
@@ -19,7 +18,6 @@ class MetricsResultManager:
         self.windowStart = None
 
     def start(self, context: PipelineRunContext):
-        # Reinicia o estado acumulado para uma nova avaliação em memória.
         self.context = context
         self.globalMetrics.reset()
         self.windowMetrics.reset()
@@ -31,77 +29,117 @@ class MetricsResultManager:
         self.windowStart = None
 
     def collect(self, row):
-        # Atualiza métricas binárias somente para linhas marcadas como avaliáveis pelo pipeline.
         if self.context is None:
-            raise RuntimeError("The result manager must be started before collection.")
+            raise RuntimeError(
+                "O gerenciador de resultados deve ser iniciado antes da coleta."
+            )
+
         self.totalInstances += 1
         if not bool(row.get("evaluationReady", False)):
             return
+
         if self.firstEvaluatedRow is None:
             self.firstEvaluatedRow = deepcopy(row)
-        instance_id = int(row["instanceId"])
+
+        instanceId = int(row["instanceId"])
         if self.windowStart is None:
-            self.windowStart = instance_id
-        true_label = int(row["isAttack"])
-        predicted_label = int(row["predictedLabel"])
-        self.attackInstances += true_label
-        self.globalMetrics.update(true_label, predicted_label)
-        self.windowMetrics.update(true_label, predicted_label)
-        self.lastEvaluatedInstance = instance_id
+            self.windowStart = instanceId
+
+        trueLabel = int(row["isAttack"])
+        predictedLabel = int(row["predictedLabel"])
+        self.attackInstances += trueLabel
+        self.globalMetrics.update(trueLabel, predictedLabel)
+        self.windowMetrics.update(trueLabel, predictedLabel)
+        self.lastEvaluatedInstance = instanceId
+
         if self.windowMetrics.instances >= self.context.metricsWindowSize:
-            self._closeWindow(instance_id)
+            self._closeWindow(instanceId)
 
     def finish(self):
-        # Retorna métricas globais e janeladas sem persistir arquivos durante trials.
         if self.context is None:
-            raise RuntimeError("No execution was started.")
+            raise RuntimeError("Nenhuma execução foi iniciada.")
         if self.firstEvaluatedRow is None:
-            raise ValueError("No instances are available to calculate metrics.")
+            raise ValueError(
+                "Não existem instâncias disponíveis após o warm-up para "
+                "calcular as métricas."
+            )
         if self.windowMetrics.instances:
             self._closeWindow(self.lastEvaluatedInstance)
-        snapshot = self.globalMetrics.snapshot()
-        evaluated_instances = int(snapshot.pop("instances"))
+
+        globalSnapshot = self.globalMetrics.snapshot()
+        evaluatedInstances = int(globalSnapshot.pop("instances"))
         first = self.firstEvaluatedRow
-        stream_metrics = {
-            "task": str(first.get("task", self.context.task)),
+        streamMetrics = {
             "dataset": str(first["dataset"]),
             "model": str(first["model"]),
+            "modelConfig": str(first["modelConfig"]),
+            "imputer": str(first["imputer"]),
+            "normalizer": str(first["normalizer"]),
+            "trainingStrategy": str(first["trainingStrategy"]),
+            "thresholdStrategy": str(first["thresholdStrategy"]),
+            "thresholdScoreSource": str(first["thresholdScoreSource"]),
+            "thresholdScoreLabel": str(first["thresholdScoreLabel"]),
             "evaluationName": str(first["evaluationName"]),
-            "warmup": int(first.get("warmup", 0)),
+            "warmup": int(first["warmup"]),
+            "modelWarmup": int(
+                first.get(
+                    "modelWarmup",
+                    first["thresholdCalibrationStart"],
+                )
+            ),
+            "thresholdWarmup": int(
+                first.get(
+                    "thresholdWarmup",
+                    first["thresholdCalibrationWindow"],
+                )
+            ),
+            "thresholdCalibrationWindow": int(
+                first["thresholdCalibrationWindow"]
+            ),
+            "thresholdCalibrationStart": int(
+                first["thresholdCalibrationStart"]
+            ),
             "totalInstances": int(self.totalInstances),
             "evaluationStart": int(first["instanceId"]),
             "evaluationEnd": int(self.lastEvaluatedInstance),
-            "evaluatedInstances": evaluated_instances,
-            "benignInstances": evaluated_instances - self.attackInstances,
+            "evaluatedInstances": evaluatedInstances,
+            "benignInstances": evaluatedInstances - self.attackInstances,
             "attackInstances": int(self.attackInstances),
-            "attackRatioPercent": Metrics.safeDivide(self.attackInstances, evaluated_instances) * 100.0,
-            **snapshot,
+            "attackRatioPercent": Metrics.safeDivide(
+                self.attackInstances,
+                evaluatedInstances,
+            )
+            * 100.0,
+            **globalSnapshot,
         }
-        result = MetricsRunResult(streamMetrics=stream_metrics, windowMetrics=tuple(deepcopy(self.windows)))
+        result = MetricsRunResult(
+            streamMetrics=streamMetrics,
+            windowMetrics=tuple(deepcopy(self.windows)),
+        )
         self.context = None
         return result
 
     def _closeWindow(self, windowEnd):
-        # Fecha a janela corrente e anexa também as métricas acumuladas até seu final.
-        window_snapshot = self.windowMetrics.snapshot()
-        cumulative_snapshot = self.globalMetrics.snapshot()
-        self.windows.append({
+        windowSnapshot = self.windowMetrics.snapshot()
+        cumulativeSnapshot = self.globalMetrics.snapshot()
+        window = {
             "windowSize": int(self.context.metricsWindowSize),
             "windowIndex": len(self.windows),
             "windowStart": int(self.windowStart),
             "windowEnd": int(windowEnd),
-            **window_snapshot,
-            "cumulativeInstances": cumulative_snapshot["instances"],
-            "cumulativeTp": cumulative_snapshot["tp"],
-            "cumulativeTn": cumulative_snapshot["tn"],
-            "cumulativeFp": cumulative_snapshot["fp"],
-            "cumulativeFn": cumulative_snapshot["fn"],
-            "cumulativeAccuracy": cumulative_snapshot["accuracy"],
-            "cumulativePrecision": cumulative_snapshot["precision"],
-            "cumulativeRecall": cumulative_snapshot["recall"],
-            "cumulativeSpecificity": cumulative_snapshot["specificity"],
-            "cumulativeF1": cumulative_snapshot["f1"],
-            "cumulativeMcc": cumulative_snapshot["mcc"],
-        })
+            **windowSnapshot,
+            "cumulativeInstances": cumulativeSnapshot["instances"],
+            "cumulativeTp": cumulativeSnapshot["tp"],
+            "cumulativeTn": cumulativeSnapshot["tn"],
+            "cumulativeFp": cumulativeSnapshot["fp"],
+            "cumulativeFn": cumulativeSnapshot["fn"],
+            "cumulativeAccuracy": cumulativeSnapshot["accuracy"],
+            "cumulativePrecision": cumulativeSnapshot["precision"],
+            "cumulativeRecall": cumulativeSnapshot["recall"],
+            "cumulativeSpecificity": cumulativeSnapshot["specificity"],
+            "cumulativeF1": cumulativeSnapshot["f1"],
+            "cumulativeMcc": cumulativeSnapshot["mcc"],
+        }
+        self.windows.append(window)
         self.windowMetrics.reset()
         self.windowStart = None
