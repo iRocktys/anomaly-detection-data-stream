@@ -7,24 +7,25 @@ class MetricsWindowPlot(PlotBase):
     defaultColors = ["#5f86ad", "#f0a43a", "#6f2dbd", "#2a9d8f", "#d1495b"]
 
     def plot(self, source, attackSource=None, outputPath=None, windowSize=None, title=None, metricColumns=None, metricLabels=None, metricColors=None, xColumn="windowEnd", attackNameColumn="labelName", attackFlagColumn="isAttack", attackAlpha=0.30, legendColumns=8, dpi=160):
+        # Gera e salva o gráfico correspondente aos dados recebidos.
         frame = self.readFrame(source)
 
         if frame.empty:
-            raise ValueError("O arquivo de métricas janeladas está vazio.")
+            raise ValueError("The windowed-metrics file is empty.")
 
         metricColumns = list(metricColumns or ["cumulativeF1", "cumulativePrecision", "cumulativeRecall", "cumulativeAccuracy"])
-        metricLabels = list(metricLabels or ["F1-score acumulado", "Precisão acumulada", "Recall acumulado", "Acurácia acumulada"])
+        metricLabels = list(metricLabels or ["Cumulative F1-score", "Cumulative Precision", "Cumulative Recall", "Cumulative Accuracy"])
         metricColors = list(metricColors or self.defaultColors)
 
         if len(metricColumns) != len(metricLabels):
-            raise ValueError("A quantidade de métricas deve ser igual à quantidade de rótulos.")
+            raise ValueError("The number of metrics must match the number of labels.")
 
         for columnName in metricColumns:
             if columnName not in frame.columns:
-                raise ValueError(f"A coluna '{columnName}' não foi encontrada.")
+                raise ValueError(f"Column '{columnName}' was not found.")
 
         if title is None:
-            title = f"Métricas acumuladas por janela — janela de {windowSize} instâncias"
+            title = f"Cumulative Metrics by Window — {windowSize} Instances"
 
         xValues = frame[xColumn] if xColumn in frame.columns else frame.index
 
@@ -38,8 +39,8 @@ class MetricsWindowPlot(PlotBase):
             handles.append(line)
 
         axis.set_title(title, fontsize=15, fontweight="bold")
-        axis.set_xlabel(f"Final de cada janela de {windowSize} instâncias")
-        axis.set_ylabel("Valor da métrica")
+        axis.set_xlabel(f"End of Each {windowSize}-Instance Window")
+        axis.set_ylabel("Metric Value")
         axis.set_ylim(-0.02, 1.02)
         self.styleAxis(axis)
 

@@ -4,13 +4,14 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from src.attack_blocks import prepare_attack_segments
+from src.Scenario.attack_blocks import prepare_attack_segments
 
 
 def split_baseline(
     baseline,
     parts,
 ):
+    # Divide o baseline em partes sequenciais para intercalar os blocos de ataque.
     indices = np.array_split(
         np.arange(
             len(baseline)
@@ -29,6 +30,7 @@ def split_baseline(
 def required_attack_segments(
     scenarios,
 ):
+    # Calcula quantas ocorrências de cada ataque são exigidas pelos cenários.
     required = Counter()
 
     for sequence in scenarios.values():
@@ -50,6 +52,7 @@ def prepare_scenario_attack_segments(
     scenarios,
     preferred_duration,
 ):
+    # Prepara todos os segmentos de ataque exigidos pela configuração dos cenários.
     required = required_attack_segments(
         scenarios
     )
@@ -91,6 +94,7 @@ def build_scenario(
     output_path,
     window,
 ):
+    # Monta a sequência final do cenário e salva seus dados e manifesto temporal.
     benign_parts = split_baseline(
         baseline,
         len(sequence) + 1,
@@ -142,7 +146,6 @@ def build_scenario(
         ignore_index=True,
     )
 
-    # Nova linha temporal contínua do cenário.
     scenario[
         "Timestamp"
     ] = pd.date_range(

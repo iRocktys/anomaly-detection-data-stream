@@ -46,36 +46,40 @@ class ModelRegistry:
 
     @staticmethod
     def loadCapymoaClass(className):
+        # Carrega a classe correspondente diretamente do módulo disponível no CapyMOA.
         try:
             from capymoa import anomaly
         except ImportError as error:
             raise ImportError(
-                "CapyMOA não está instalado no ambiente. Instale-o antes de executar os modelos."
+                "CapyMOA is not installed in the environment. Install it before running the models."
             ) from error
         return getattr(anomaly, className)
 
     @classmethod
     def normalizeCode(cls, code):
+        # Normaliza e valida o código textual informado para o modelo.
         resolvedCode = str(code).strip().upper()
         if resolvedCode not in cls.definitions:
             supported = ", ".join(sorted(cls.definitions))
-            raise ValueError(f"Modelo desconhecido: {code}. Disponíveis: {supported}.")
+            raise ValueError(f"Unknown model: {code}. Available: {supported}.")
         return resolvedCode
 
     @classmethod
     def validateParameters(cls, code, parameters):
+        # Valida se os parâmetros informados pertencem ao contrato do modelo selecionado.
         resolvedCode = cls.normalizeCode(code)
         definition = cls.definitions[resolvedCode]
         allowed = set(definition.defaults) | {definition.seedParameter, "schema"}
         unknown = sorted(set(parameters) - allowed)
         if unknown:
             raise ValueError(
-                f"Parâmetros inválidos para {resolvedCode}: {unknown}. "
-                f"Permitidos: {sorted(allowed - {'schema'})}."
+                f"Invalid parameters for {resolvedCode}: {unknown}. "
+                f"Allowed: {sorted(allowed - {'schema'})}."
             )
 
     @classmethod
     def create(cls, schema, modelConfig, runSeed):
+        # Cria a implementação registrada usando o nome e os parâmetros informados.
         code = cls.normalizeCode(modelConfig.code)
         definition = cls.definitions[code]
         parameters = dict(definition.defaults)
@@ -88,14 +92,15 @@ class ModelRegistry:
             model = modelClass(**parameters)
         except TypeError as error:
             raise TypeError(
-                f"Falha ao criar {code} com parâmetros {parameters}. "
-                "Confira a versão do CapyMOA e os nomes dos parâmetros."
+                f"Failed to create {code} with parameters {parameters}. "
+                "Check the installed CapyMOA version and parameter names."
             ) from error
         persistedParameters = {key: value for key, value in parameters.items() if key != "schema"}
         return definition.displayName, model, persistedParameters
 
     @classmethod
     def describe(cls):
+        # Retorna uma descrição tabular das implementações registradas e seus parâmetros padrão.
         return {
             code: {
                 "displayName": definition.displayName,

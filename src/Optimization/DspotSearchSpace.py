@@ -69,7 +69,7 @@ class DspotSearchSpaceConfig:
             != defaults.DEFAULT_DSPOT_CALIBRATION_WINDOW
         ):
             raise ValueError(
-                "A janela total de calibração do DSPOT deve permanecer em 500."
+                "The total DSPOT calibration window must remain 500."
             )
 
         if (
@@ -82,7 +82,7 @@ class DspotSearchSpaceConfig:
             < self.driftDepthMinimum
         ):
             raise ValueError(
-                "Intervalo de driftDepth incompatível com a janela DSPOT de 500."
+                "driftDepth range is incompatible with the 500-score DSPOT calibration window."
             )
 
         if (
@@ -90,7 +90,7 @@ class DspotSearchSpaceConfig:
             - self.driftDepthMinimum
         ) % self.driftDepthStep:
             raise ValueError(
-                "O intervalo de driftDepth deve ser divisível pelo passo."
+                "O intervalo de driftDepth must be divisible by the step."
             )
 
         if not set(
@@ -100,12 +100,12 @@ class DspotSearchSpaceConfig:
             "movingAverage",
         }:
             raise ValueError(
-                "Fonte de score inválida no espaço de busca."
+                "Invalid score source in the search space."
             )
 
         if not self.scoreModes:
             raise ValueError(
-                "O espaço deve possuir ao menos uma fonte de score."
+                "The search space must contain at least one score source."
             )
 
         if (
@@ -115,7 +115,7 @@ class DspotSearchSpaceConfig:
             < self.movingAverageMinimum
         ):
             raise ValueError(
-                "Intervalo de média móvel inválido."
+                "Invalid moving-average range."
             )
 
         if not (
@@ -125,7 +125,7 @@ class DspotSearchSpaceConfig:
             < 1.0
         ):
             raise ValueError(
-                "Intervalo de initialQuantile inválido."
+                "Invalid initialQuantile range."
             )
 
         if not (
@@ -135,7 +135,7 @@ class DspotSearchSpaceConfig:
             < 1.0
         ):
             raise ValueError(
-                "Intervalo de risk inválido."
+                "Invalid risk range."
             )
 
         if (
@@ -145,7 +145,7 @@ class DspotSearchSpaceConfig:
             < self.refitEveryMinimum
         ):
             raise ValueError(
-                "Intervalo de refitEvery inválido."
+                "Invalid refitEvery range."
             )
 
         if (
@@ -155,7 +155,7 @@ class DspotSearchSpaceConfig:
             < self.optimizationStartsMinimum
         ):
             raise ValueError(
-                "Intervalo de optimizationStarts inválido."
+                "Invalid optimizationStarts range."
             )
 
         if not (
@@ -170,7 +170,7 @@ class DspotSearchSpaceConfig:
             <= self.toleranceMaximum
         ):
             raise ValueError(
-                "Intervalo de tolerance inválido."
+                "Invalid tolerance range."
             )
 
 

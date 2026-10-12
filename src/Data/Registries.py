@@ -11,7 +11,7 @@ class NoOnlineImputer:
         # Retorna os valores sem imputação e rejeita dados ausentes antes do modelo.
         prepared = np.asarray(values, dtype=np.float64).copy()
         if np.any(~np.isfinite(prepared)):
-            raise ValueError("O imputador 'none' recebeu valores ausentes ou não finitos.")
+            raise ValueError("The 'none' imputer received missing or non-finite values.")
         return prepared
 
     def update(self, values):
@@ -42,7 +42,7 @@ class ImputerRegistry:
         # Cria um imputador a partir de um nome textual e parâmetros opcionais.
         key = str(name).strip().lower().replace("_", "").replace("-", "")
         if key not in cls.factories:
-            raise ValueError(f"Imputador desconhecido: {name}. Disponíveis: {sorted(cls.factories)}")
+            raise ValueError(f"Unknown imputer: {name}. Available: {sorted(cls.factories)}")
         return cls.factories[key](**dict(parameters or {}))
 
 
@@ -57,5 +57,5 @@ class NormalizerRegistry:
         # Cria um normalizador a partir de um nome textual e parâmetros opcionais.
         key = str(name).strip().lower().replace("_", "").replace("-", "")
         if key not in cls.factories:
-            raise ValueError(f"Normalizador desconhecido: {name}. Disponíveis: {sorted(cls.factories)}")
+            raise ValueError(f"Unknown normalizer: {name}. Available: {sorted(cls.factories)}")
         return cls.factories[key](**dict(parameters or {}))

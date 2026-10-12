@@ -1,5 +1,5 @@
-from Thresholds.FixedThreshold import FixedThreshold
-from Thresholds.Incremental.DspotThreshold import DspotConfig, DspotThreshold
+from src.Thresholds.FixedThreshold import FixedThreshold
+from src.Thresholds.Incremental.DspotThreshold import DspotConfig, DspotThreshold
 
 
 class ThresholdRegistry:
@@ -16,4 +16,4 @@ class ThresholdRegistry:
                 drift_depth = int(values.get("driftDepth", DspotConfig().driftDepth))
                 values["calibrationSize"] = calibration_window - drift_depth
             return DspotThreshold(DspotConfig(**values))
-        raise ValueError("Threshold desconhecido: %s. Disponíveis: ['dspot', 'fixed']" % name)
+        raise ValueError("Threshold desconhecido: %s. Available: ['dspot', 'fixed']" % name)

@@ -21,6 +21,7 @@ class Metrics:
 
     @staticmethod
     def calculate(yTrue, yPred):
+        # Calcula o resultado correspondente aos valores recebidos pela rotina.
         trueValues = np.asarray(yTrue, dtype=int)
         predictedValues = np.asarray(yPred, dtype=int)
         if trueValues.shape != predictedValues.shape:
@@ -40,6 +41,7 @@ class Metrics:
 
     @staticmethod
     def fromCounts(tp, tn, fp, fn):
+        # Executa a responsabilidade específica desta função dentro do módulo atual.
         tp = int(tp)
         tn = int(tn)
         fp = int(fp)
@@ -47,7 +49,7 @@ class Metrics:
 
         if min(tp, tn, fp, fn) < 0:
             raise ValueError(
-                "Os valores da matriz de confusão não podem ser negativos."
+                "Confusion-matrix values cannot be negative."
             )
 
         total = tp + tn + fp + fn
@@ -76,6 +78,7 @@ class Metrics:
 
     @staticmethod
     def evaluateFrame(frame, trueColumn="isAttack", predictionColumn="prediction", readyColumn=None):
+        # Executa a responsabilidade específica desta função dentro do módulo atual.
         selected = frame
         if readyColumn and readyColumn in selected.columns:
             selected = selected[selected[readyColumn].astype(bool)]
@@ -83,6 +86,7 @@ class Metrics:
 
     @staticmethod
     def windowed(frame, windowSize=1000, trueColumn="isAttack", predictionColumn="prediction", readyColumn=None):
+        # Executa a responsabilidade específica desta função dentro do módulo atual.
         windowSize = max(1, int(windowSize))
         rows = []
         for start in range(0, len(frame), windowSize):
@@ -102,6 +106,7 @@ class Metrics:
 
     @staticmethod
     def attackBreakdown(frame, labelColumn="trueLabel", nameColumn="labelName", predictionColumn="prediction", normalClassIndex=0):
+        # Executa a responsabilidade específica desta função dentro do módulo atual.
         rows = []
         if labelColumn not in frame.columns:
             return rows
@@ -128,4 +133,5 @@ class Metrics:
 
     @staticmethod
     def safeDivide(numerator, denominator):
+        # Executa uma divisão protegida contra denominadores iguais a zero.
         return float(numerator / denominator) if denominator else 0.0

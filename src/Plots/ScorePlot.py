@@ -16,7 +16,7 @@ class ScorePlot(PlotBase):
         self,
         source,
         outputPath=None,
-        title="Scores, médias móveis e limiar causal",
+        title="Scores, Moving Averages and Causal Threshold",
         rawScoreColumn="rawScore",
         scoreColumn="score",
         thresholdColumn="threshold",
@@ -34,16 +34,17 @@ class ScorePlot(PlotBase):
         legendColumns=8,
         dpi=160,
     ):
+        # Gera e salva o gráfico correspondente aos dados recebidos.
         frame = self.readFrame(source)
 
         if frame.empty:
             raise ValueError(
-                "O arquivo de scores está vazio."
+                "The score file is empty."
             )
 
         if rawScoreColumn not in frame.columns:
             raise ValueError(
-                f"A coluna '{rawScoreColumn}' não foi encontrada."
+                f"Column '{rawScoreColumn}' was not found."
             )
 
         xValues = self.getXAxis(frame)
@@ -78,7 +79,7 @@ class ScorePlot(PlotBase):
             color="#657380",
             linewidth=0.70,
             alpha=0.46,
-            label="Score bruto",
+            label="Raw Score",
             zorder=2,
         )
 
@@ -104,8 +105,7 @@ class ScorePlot(PlotBase):
             != len(movingAverageColumns)
         ):
             raise ValueError(
-                "A quantidade de rótulos deve ser igual à "
-                "quantidade de colunas de média móvel."
+                "The number of labels must match the number of moving-average columns."
             )
 
         for index, columnName in enumerate(
@@ -113,8 +113,8 @@ class ScorePlot(PlotBase):
         ):
             if columnName not in frame.columns:
                 raise ValueError(
-                    "A coluna de média móvel "
-                    f"'{columnName}' não foi encontrada."
+                    "Moving-average column "
+                    f"'{columnName}' was not found."
                 )
 
             values = self.numericSeries(
@@ -162,7 +162,7 @@ class ScorePlot(PlotBase):
                     linewidth=1.15,
                     linestyle="--",
                     alpha=0.72,
-                    label="Score usado na decisão",
+                    label="Decision Score",
                     zorder=7,
                 )
 
@@ -197,7 +197,7 @@ class ScorePlot(PlotBase):
             fontsize=15,
             fontweight="bold",
         )
-        axis.set_xlabel("Instância")
+        axis.set_xlabel("Instance")
         axis.set_ylabel("Score")
 
         self.styleAxis(axis)
@@ -227,6 +227,7 @@ class ScorePlot(PlotBase):
         thresholdLabel,
         thresholdScoreLabelColumn,
     ):
+        # Resolve o texto utilizado para identificar o threshold no gráfico de scores.
         if thresholdLabel is not None:
             return str(thresholdLabel)
 
@@ -245,6 +246,7 @@ class ScorePlot(PlotBase):
         frame,
         columnName,
     ):
+        # Obtém um único valor textual consistente a partir de uma coluna de resultados.
         if columnName not in frame.columns:
             return None
 

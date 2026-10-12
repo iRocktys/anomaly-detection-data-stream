@@ -1,12 +1,13 @@
 import pandas as pd
 
-from src.aggregation import aggregate_window
-from src.entropy import calculate_entropies
+from src.Scenario.aggregation import aggregate_window
+from src.Scenario.entropy import calculate_entropies
 
 
 def attack_ratio(
     started_flows,
 ):
+    # Calcula a proporção de fluxos de ataque entre os fluxos iniciados na janela.
     attack_count = (
         started_flows[
             "CanonicalLabel"
@@ -24,6 +25,7 @@ def attack_ratio(
 def dominant_attack(
     started_flows,
 ):
+    # Identifica o tipo de ataque mais frequente entre os fluxos da janela.
     attacks = (
         started_flows.loc[
             started_flows[
@@ -46,6 +48,7 @@ def aggregate_started_flows(
     window_start,
     attack_ratio_threshold,
 ):
+    # Agrega uma janela de fluxos iniciados e define seu rótulo pelo AttackRatio.
     ratio = attack_ratio(
         started_flows
     )
@@ -69,8 +72,6 @@ def aggregate_started_flows(
         "AttackRatio": ratio,
     }
 
-    # Entropias calculadas usando IPs, portas e protocolo,
-    # mas os valores originais dessas colunas NÃO são exportados.
     row.update(
         calculate_entropies(
             started_flows
@@ -90,6 +91,7 @@ def create_windows(
     flows,
     attack_ratio_threshold,
 ):
+    # Agrupa os fluxos preparados por janela e produz uma linha agregada por janela não vazia.
     rows = []
 
     for window_start, started_flows in (
@@ -113,6 +115,7 @@ def create_windows_chunked(
     prepared_chunks,
     attack_ratio_threshold,
 ):
+    # Cria janelas sobre chunks preservando corretamente a janela que cruza fronteiras de leitura.
     rows = []
     carry = None
 

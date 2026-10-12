@@ -18,6 +18,7 @@ class ResultFrameBuilder:
     ]
 
     def buildWindowFrame(self, instanceFrame, windowSize):
+        # Constrói a tabela de métricas calculadas por janela de avaliação.
         windowSize = max(1, int(windowSize))
         evaluatedFrame = self.selectEvaluatedFrame(instanceFrame)
         rows = []
@@ -52,6 +53,7 @@ class ResultFrameBuilder:
         return pd.DataFrame(rows)
 
     def buildStreamMetricsFrame(self, instanceFrame):
+        # Constrói a tabela com as métricas globais da stream processada.
         evaluatedFrame = self.selectEvaluatedFrame(instanceFrame)
         metricValues = Metrics.calculate(
             evaluatedFrame["isAttack"],
@@ -94,6 +96,7 @@ class ResultFrameBuilder:
         return pd.DataFrame([row])
 
     def selectEvaluatedFrame(self, instanceFrame):
+        # Seleciona somente as instâncias efetivamente liberadas para avaliação.
         if "evaluationReady" in instanceFrame.columns:
             evaluationMask = instanceFrame["evaluationReady"].astype(bool)
         elif "thresholdReady" in instanceFrame.columns:
@@ -111,25 +114,25 @@ class ResultFrameBuilder:
                 )
         else:
             raise ValueError(
-                "Não foi encontrada uma coluna que indique quais instâncias "
-                "podem ser avaliadas."
+                "No column indicating evaluable instances was found."
             )
 
         evaluatedFrame = instanceFrame[evaluationMask].reset_index(drop=True)
         if evaluatedFrame.empty:
             raise ValueError(
-                "Não existem instâncias disponíveis após o warm-up para "
-                "calcular as métricas."
+                "No instances are available after warm-up to calculate metrics."
             )
         return evaluatedFrame
 
     def _metadata(self, frame):
+        # Extrai os metadados comuns necessários para compor os resultados.
         return {
             column: str(frame[column].iloc[0])
             for column in self.metadataColumns
         }
 
     def _cumulativeMetrics(self, metrics):
+        # Obtém as métricas acumuladas da última instância avaliada.
         return {
             "cumulativeInstances": metrics["instances"],
             "cumulativeTp": metrics["tp"],

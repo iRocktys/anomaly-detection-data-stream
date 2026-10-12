@@ -3,12 +3,15 @@ from pathlib import Path
 
 DEFAULT_OUTPUT_ROOT = Path("output")
 DEFAULT_OPTIMIZATION_OUTPUT_ROOT = DEFAULT_OUTPUT_ROOT / "Optimization"
+DEFAULT_SIMILARITY_OUTPUT_ROOT = DEFAULT_OUTPUT_ROOT / "Similarity"
+DEFAULT_DSPOT_OUTPUT_ROOT = DEFAULT_OUTPUT_ROOT / "DSPOT"
 
 DEFAULT_TARGET_COLUMN = "Label"
 DEFAULT_SELECTED_FEATURES = None
 DEFAULT_REMOVED_FEATURES = None
 DEFAULT_BINARY_LABEL = True
 DEFAULT_NORMAL_CLASS_INDEX = 0
+DEFAULT_NORMAL_LABELS = ("BENIGN", "NORMAL", "0")
 
 DEFAULT_MODEL_CODE = "AIF"
 DEFAULT_AIF_PARAMETERS = {
@@ -41,6 +44,29 @@ DEFAULT_MODEL_PARAMETERS = {
     },
 }
 
+DEFAULT_CLASSIFIER_CODE = "HAT"
+DEFAULT_CLASSIFIER_PARAMETERS = {
+    "ARF": {
+        "ensemble_size": 100,
+        "max_features": 0.6,
+        "lambda_param": 6.0,
+        "number_of_jobs": 1,
+    },
+    "HAT": {
+        "grace_period": 200,
+        "confidence": 1e-3,
+        "tie_threshold": 0.05,
+        "leaf_prediction": "NaiveBayesAdaptive",
+    },
+    "HT": {
+        "grace_period": 200,
+        "confidence": 1e-3,
+        "tie_threshold": 0.05,
+        "leaf_prediction": "NaiveBayesAdaptive",
+    },
+    "NB": {},
+}
+
 DEFAULT_IMPUTER_NAME = "incrementalMean"
 DEFAULT_IMPUTER_PARAMETERS = {}
 DEFAULT_NORMALIZER_NAME = "incrementalZScore"
@@ -53,10 +79,8 @@ DEFAULT_TRAINING_PARAMETERS = {}
 
 DEFAULT_AIF_WARMUP_SIZE = 500
 DEFAULT_DSPOT_CALIBRATION_WINDOW = 500
-DEFAULT_INITIAL_WARMUP_SIZE = (
-    DEFAULT_AIF_WARMUP_SIZE
-    + DEFAULT_DSPOT_CALIBRATION_WINDOW
-)
+DEFAULT_INITIAL_WARMUP_SIZE = DEFAULT_AIF_WARMUP_SIZE + DEFAULT_DSPOT_CALIBRATION_WINDOW
+DEFAULT_CLASSIFICATION_WARMUP_SIZE = 0
 
 DEFAULT_THRESHOLD_NAME = "dspot"
 DEFAULT_SCORE_WINDOW_SIZES = (10,)
@@ -64,10 +88,7 @@ DEFAULT_THRESHOLD_SCORE_SOURCE = "ma10"
 DEFAULT_DSPOT_DRIFT_DEPTH = 50
 DEFAULT_DSPOT_PARAMETERS = {
     "driftDepth": DEFAULT_DSPOT_DRIFT_DEPTH,
-    "calibrationSize": (
-        DEFAULT_DSPOT_CALIBRATION_WINDOW
-        - DEFAULT_DSPOT_DRIFT_DEPTH
-    ),
+    "calibrationSize": DEFAULT_DSPOT_CALIBRATION_WINDOW - DEFAULT_DSPOT_DRIFT_DEPTH,
     "initialQuantile": 0.95,
     "risk": 0.001,
     "refitEvery": 10,
@@ -88,23 +109,23 @@ DEFAULT_MAX_TRIAL_ATTEMPTS_MULTIPLIER = 10
 
 
 def getModelDefaults(code=DEFAULT_MODEL_CODE):
-    # Retorna uma cópia dos parâmetros padrão do modelo solicitado.
-    resolved = str(code).strip().upper()
+    # Retorna uma cópia dos parâmetros padrão do detector de anomalias solicitado.
+    resolved_code = str(code).strip().upper()
+    if resolved_code not in DEFAULT_MODEL_PARAMETERS:
+        raise ValueError(f"Unknown anomaly detector defaults: {resolved_code}.")
+    return deepcopy(DEFAULT_MODEL_PARAMETERS[resolved_code])
 
-    if resolved not in DEFAULT_MODEL_PARAMETERS:
-        raise ValueError(
-            f"Modelo sem defaults no projeto: {resolved}."
-        )
 
-    return deepcopy(
-        DEFAULT_MODEL_PARAMETERS[
-            resolved
-        ]
-    )
+def getClassifierDefaults(code=DEFAULT_CLASSIFIER_CODE):
+    # Retorna uma cópia dos parâmetros padrão do classificador solicitado.
+    resolved_code = str(code).strip().upper()
+    if resolved_code not in DEFAULT_CLASSIFIER_PARAMETERS:
+        raise ValueError(f"Unknown classifier defaults: {resolved_code}.")
+    return deepcopy(DEFAULT_CLASSIFIER_PARAMETERS[resolved_code])
 
 
 def getDefaultParameters():
-    # Retorna a configuração técnica padrão com protocolo fixo de 500 AIF + 500 DSPOT.
+    # Retorna a configuração padrão do experimento de detecção preservando o contrato original do projeto.
     return {
         "dataset": {
             "targetColumn": DEFAULT_TARGET_COLUMN,
@@ -114,35 +135,23 @@ def getDefaultParameters():
         },
         "model": {
             "code": DEFAULT_MODEL_CODE,
-            "parameters": getModelDefaults(
-                DEFAULT_MODEL_CODE
-            ),
+            "parameters": getModelDefaults(DEFAULT_MODEL_CODE),
         },
         "preprocessing": {
             "imputer": DEFAULT_IMPUTER_NAME,
-            "imputerParameters": deepcopy(
-                DEFAULT_IMPUTER_PARAMETERS
-            ),
+            "imputerParameters": deepcopy(DEFAULT_IMPUTER_PARAMETERS),
             "normalizer": DEFAULT_NORMALIZER_NAME,
-            "normalizerParameters": deepcopy(
-                DEFAULT_NORMALIZER_PARAMETERS
-            ),
+            "normalizerParameters": deepcopy(DEFAULT_NORMALIZER_PARAMETERS),
         },
         "training": {
             "strategy": DEFAULT_TRAINING_STRATEGY,
-            "parameters": deepcopy(
-                DEFAULT_TRAINING_PARAMETERS
-            ),
+            "parameters": deepcopy(DEFAULT_TRAINING_PARAMETERS),
         },
         "threshold": {
             "name": DEFAULT_THRESHOLD_NAME,
             "scoreSource": DEFAULT_THRESHOLD_SCORE_SOURCE,
-            "scoreWindowSizes": tuple(
-                DEFAULT_SCORE_WINDOW_SIZES
-            ),
-            "parameters": deepcopy(
-                DEFAULT_DSPOT_PARAMETERS
-            ),
+            "scoreWindowSizes": tuple(DEFAULT_SCORE_WINDOW_SIZES),
+            "parameters": deepcopy(DEFAULT_DSPOT_PARAMETERS),
         },
         "execution": {
             "initialWarmupSize": DEFAULT_INITIAL_WARMUP_SIZE,
@@ -152,3 +161,16 @@ def getDefaultParameters():
             "strictTrainingErrors": DEFAULT_STRICT_TRAINING_ERRORS,
         },
     }
+
+
+def getClassificationParameters():
+    # Retorna a configuração padrão do experimento supervisionado binário sem alterar os defaults de detecção.
+    parameters = getDefaultParameters()
+    parameters["model"] = {
+        "code": DEFAULT_CLASSIFIER_CODE,
+        "parameters": getClassifierDefaults(DEFAULT_CLASSIFIER_CODE),
+    }
+    parameters["execution"]["initialWarmupSize"] = DEFAULT_CLASSIFICATION_WARMUP_SIZE
+    parameters.pop("threshold", None)
+    parameters.pop("training", None)
+    return parameters

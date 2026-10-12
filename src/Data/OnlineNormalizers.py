@@ -3,31 +3,37 @@ import numpy as np
 
 class BaseOnlineNormalizer:
     def __init__(self, epsilon=1e-8):
+        # Inicializa o estado e as dependências necessárias para a execução da classe.
         self.epsilon = float(epsilon)
 
     def transform(self, values):
+        # Transforma os valores de entrada conforme a estratégia incremental configurada.
         return self.prepareValues(values)
 
     def update(self, values, observedMask=None):
+        # Atualiza o estado incremental com os valores da instância atual.
         return None
 
     def reset(self):
+        # Reinicia o estado interno para permitir uma nova execução.
         return None
 
     def prepareValues(self, values):
+        # Converte e valida os valores de entrada antes do processamento incremental.
         preparedValues = np.asarray(values, dtype=np.float64)
 
         if preparedValues.ndim != 1:
-            raise ValueError("O normalizador aceita apenas vetores unidimensionais.")
+            raise ValueError("The normalizer accepts only one-dimensional vectors.")
 
         if np.any(~np.isfinite(preparedValues)):
             raise ValueError(
-                "O normalizador recebeu valores não finitos. A imputação deve ocorrer antes da normalização."
+                "The normalizer received non-finite values. Imputation must occur before normalization."
             )
 
         return preparedValues.copy()
 
     def prepareObservedMask(self, observedMask, featureCount):
+        # Prepara a máscara que identifica as features observadas na instância atual.
         if observedMask is None:
             return np.ones(featureCount, dtype=bool)
 
@@ -35,7 +41,7 @@ class BaseOnlineNormalizer:
 
         if preparedMask.ndim != 1 or preparedMask.size != featureCount:
             raise ValueError(
-                "A máscara de valores observados deve possuir uma posição para cada feature."
+                "The observed-value mask must contain one position for each feature."
             )
 
         return preparedMask
@@ -43,11 +49,13 @@ class BaseOnlineNormalizer:
 
 class IncrementalZScoreNormalizer(BaseOnlineNormalizer):
     def __init__(self, epsilon=1e-8, clip=None):
+        # Inicializa o estado e as dependências necessárias para a execução da classe.
         super().__init__(epsilon)
         self.clip = clip
         self.reset()
 
     def transform(self, values):
+        # Transforma os valores de entrada conforme a estratégia incremental configurada.
         preparedValues = self.prepareValues(values)
         self.ensureState(preparedValues.size)
 
@@ -72,6 +80,7 @@ class IncrementalZScoreNormalizer(BaseOnlineNormalizer):
         return normalizedValues
 
     def update(self, values, observedMask=None):
+        # Atualiza o estado incremental com os valores da instância atual.
         preparedValues = self.prepareValues(values)
         self.ensureState(preparedValues.size)
         preparedMask = self.prepareObservedMask(
@@ -92,6 +101,7 @@ class IncrementalZScoreNormalizer(BaseOnlineNormalizer):
         self.counts[preparedMask] = updatedCounts
 
     def ensureState(self, featureCount):
+        # Inicializa ou valida o estado interno de acordo com a quantidade de features.
         featureCount = int(featureCount)
 
         if self.counts is None:
@@ -102,10 +112,11 @@ class IncrementalZScoreNormalizer(BaseOnlineNormalizer):
 
         if self.counts.size != featureCount:
             raise ValueError(
-                "A quantidade de features recebida pelo normalizador mudou durante a execução."
+                "The number of features received by the normalizer changed during execution."
             )
 
     def reset(self):
+        # Reinicia o estado interno para permitir uma nova execução.
         self.counts = None
         self.means = None
         self.squareDistances = None

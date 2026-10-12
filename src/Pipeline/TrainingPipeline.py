@@ -9,6 +9,7 @@ from src.Pipeline.ResultContracts import (
     ResultManagerProtocol,
 )
 from src.Pipeline.ResultManager import ResultManager
+from src.Pipeline.InstanceFactory import InstanceFactory
 from src.Scores.ScoreMovingAverages import ScoreMovingAverages
 from src.Training.TrainAllStrategy import TrainAllStrategy
 
@@ -36,6 +37,7 @@ class TrainingPipeline:
         resultManager=None,
         strictTrainingErrors=False,
     ):
+        # Inicializa o estado e as dependências necessárias para a execução da classe.
         self.strictTrainingErrors = bool(strictTrainingErrors)
         self.stream = stream
         self.datasetName = str(datasetName)
@@ -83,8 +85,7 @@ class TrainingPipeline:
         )
         if not isinstance(self.resultManager, ResultManagerProtocol):
             raise TypeError(
-                "resultManager deve implementar start(context), "
-                "collect(row) e finish()."
+                "resultManager must implement start(context), collect(row), and finish()."
             )
         self.normalClassIndex = int(
             normalClassIndex
@@ -105,8 +106,7 @@ class TrainingPipeline:
 
         if self.initialWarmupSize >= len(self.labelNames):
             raise ValueError(
-                "initialWarmupSize deve ser menor que a quantidade de "
-                "instâncias para que exista ao menos uma instância de avaliação."
+                "initialWarmupSize must leave at least one instance for evaluation."
             )
 
         self.thresholdCalibrationStart = (
@@ -125,6 +125,7 @@ class TrainingPipeline:
         self.model = None
 
     def run(self):
+        # Executa o fluxo principal da rotina e retorna os resultados produzidos.
         self.resetComponents()
         self.stream.restart()
         self.createModel()
@@ -147,7 +148,7 @@ class TrainingPipeline:
         while self.stream.has_more_instances():
             if instanceIndex >= len(self.labelNames):
                 raise RuntimeError(
-                    "Não existe rótulo original para a instância atual da stream."
+                    "There is no original label for the current stream instance."
                 )
 
             rawInstance = (
@@ -162,13 +163,13 @@ class TrainingPipeline:
 
         if instanceIndex != len(self.labelNames):
             raise RuntimeError(
-                "A quantidade de rótulos originais é diferente da quantidade "
-                "de instâncias da stream."
+                "The number of original labels differs from the number of stream instances."
             )
 
         return self.resultManager.finish()
 
     def createModel(self):
+        # Cria o modelo configurado usando o schema e os parâmetros da execução.
         schema = self.getStreamSchema()
         definition = (
             ModelRegistry
@@ -205,6 +206,7 @@ class TrainingPipeline:
         rawInstance,
         instanceIndex,
     ):
+        # Processa uma instância da stream aplicando o fluxo incremental configurado.
         rawValues = np.asarray(
             rawInstance.x,
             dtype=np.float64,
@@ -223,7 +225,7 @@ class TrainingPipeline:
             ~np.isfinite(imputedValues)
         ):
             raise RuntimeError(
-                "O imputador produziu valores não finitos."
+                "The imputer produced non-finite values."
             )
 
         normalizedValues = (
@@ -236,7 +238,7 @@ class TrainingPipeline:
             ~np.isfinite(normalizedValues)
         ):
             raise RuntimeError(
-                "O normalizador produziu valores não finitos."
+                "The normalizer produced non-finite values."
             )
 
         modelInstance = (
@@ -417,6 +419,7 @@ class TrainingPipeline:
         score,
         instanceIndex,
     ):
+        # Atualiza o threshold incremental com o score produzido pela instância atual.
         if self.threshold.isReady():
             if (
                 instanceIndex
@@ -447,7 +450,7 @@ class TrainingPipeline:
             >= self.initialWarmupSize
         ):
             raise RuntimeError(
-                "O threshold não foi inicializado dentro do warm-up configurado."
+                "The threshold was not initialized within the configured warm-up."
             )
 
         self.thresholdWarmupScores.append(
@@ -467,14 +470,14 @@ class TrainingPipeline:
             > self.thresholdCalibrationWindowSize
         ):
             raise RuntimeError(
-                "Foram coletados mais scores do que o tamanho da "
-                "janela de calibração."
+                "More scores were collected than the calibration-window size."
             )
 
     def trainModel(
         self,
         modelInstance,
     ):
+        # Treina o modelo incrementalmente com a instância permitida pela estratégia atual.
         try:
             self.model.train(
                 modelInstance
@@ -490,41 +493,22 @@ class TrainingPipeline:
         rawInstance,
         values,
     ):
-        from capymoa.instance import LabeledInstance
-
-        return LabeledInstance.from_array(
-            schema=rawInstance.schema,
-            x=np.asarray(
-                values,
-                dtype=np.float64,
-            ),
-            y_index=int(
-                rawInstance.y_index
-            ),
+        # Reconstrói a instância rotulada usando a camada comum de compatibilidade com o CapyMOA.
+        return InstanceFactory.createLabeledInstance(
+            rawInstance,
+            values,
         )
 
     def getStreamSchema(self):
-        if hasattr(
-            self.stream,
-            "get_schema",
-        ):
-            return (
-                self.stream.get_schema()
-            )
-
-        if hasattr(
-            self.stream,
-            "schema",
-        ):
-            return self.stream.schema
-
-        raise AttributeError(
-            "Não foi possível obter o schema da stream."
+        # Obtém o schema da stream sem depender de uma única versão da API do CapyMOA.
+        return InstanceFactory.getStreamSchema(
+            self.stream
         )
 
     def getThresholdCalibrationWindowSize(
         self,
     ):
+        # Obtém o tamanho total da janela usada para calibrar o threshold.
         if (
             hasattr(
                 self.threshold,
@@ -547,6 +531,7 @@ class TrainingPipeline:
         self,
         initialWarmupSize,
     ):
+        # Resolve e valida o tamanho do warm-up inicial utilizado pela execução.
         if initialWarmupSize is None:
             initialWarmupSize = (
                 self.thresholdCalibrationWindowSize
@@ -558,7 +543,7 @@ class TrainingPipeline:
 
         if initialWarmupSize < 0:
             raise ValueError(
-                "initialWarmupSize deve ser maior ou igual a zero."
+                "initialWarmupSize must be greater than or equal to zero."
             )
 
         if (
@@ -566,8 +551,7 @@ class TrainingPipeline:
             < self.thresholdCalibrationWindowSize
         ):
             raise ValueError(
-                "initialWarmupSize deve ser maior ou igual à janela de "
-                "calibração do threshold "
+                "initialWarmupSize must be greater than or equal to the threshold calibration window "
                 f"({self.thresholdCalibrationWindowSize})."
             )
 
@@ -577,7 +561,7 @@ class TrainingPipeline:
         # Valida o encaixe da janela do AIF na fase anterior à calibração do threshold.
         if self.modelWarmupSize < 0:
             raise ValueError(
-                "O warm-up exclusivo do modelo não pode ser negativo."
+                "The model-only warm-up cannot be negative."
             )
 
         if self.modelCode == "AIF":
@@ -599,14 +583,15 @@ class TrainingPipeline:
 
             if windowSize > self.modelWarmupSize:
                 raise ValueError(
-                    "A janela do AIF não pode superar a fase de warm-up "
-                    f"do modelo ({self.modelWarmupSize})."
+                    "The AIF window cannot exceed the model warm-up phase "
+                    f"({self.modelWarmupSize})."
                 )
 
     def normalizeThresholdScoreSource(
         self,
         thresholdScoreSource,
     ):
+        # Normaliza o identificador da fonte de score usada pelo threshold.
         source = (
             str(thresholdScoreSource)
             .strip()
@@ -644,15 +629,13 @@ class TrainingPipeline:
 
         else:
             raise ValueError(
-                "thresholdScoreSource inválido. Use 'raw', 'ma10', "
-                "'ma50', 'ma100' ou outra média presente em "
-                "scoreWindowSizes."
+                "Invalid thresholdScoreSource. Use 'raw', 'ma10', 'ma50', 'ma100', "
+                "or another moving average present in scoreWindowSizes."
             )
 
         if not windowText.isdigit():
             raise ValueError(
-                "thresholdScoreSource inválido. O tamanho da média "
-                "móvel deve ser inteiro."
+                "Invalid thresholdScoreSource. The moving-average size must be an integer."
             )
 
         windowSize = int(
@@ -664,8 +647,7 @@ class TrainingPipeline:
             not in self.scoreMovingAverages.windowSizes
         ):
             raise ValueError(
-                f"A média móvel {windowSize} não está disponível. "
-                f"Inclua {windowSize} em scoreWindowSizes."
+                f"Moving average {windowSize} is not available. Include {windowSize} in scoreWindowSizes."
             )
 
         return f"scoreMa{windowSize}"
@@ -675,6 +657,7 @@ class TrainingPipeline:
         rawScore,
         scoreAverages,
     ):
+        # Obtém o score efetivamente utilizado pela estratégia de threshold.
         if (
             self.thresholdScoreSource
             == "raw"
@@ -686,8 +669,7 @@ class TrainingPipeline:
             not in scoreAverages
         ):
             raise RuntimeError(
-                f"A série '{self.thresholdScoreSource}' não foi calculada "
-                "para a instância atual."
+                f"Series '{self.thresholdScoreSource}' was not calculated for the current instance."
             )
 
         return float(
@@ -697,6 +679,7 @@ class TrainingPipeline:
         )
 
     def getThresholdScoreLabel(self):
+        # Retorna o nome descritivo da fonte de score utilizada pelo threshold.
         if (
             self.thresholdScoreSource
             == "raw"
@@ -714,6 +697,7 @@ class TrainingPipeline:
         return f"MA {windowSize}"
 
     def getThresholdScoreName(self):
+        # Retorna o identificador normalizado da fonte de score do threshold.
         if (
             self.thresholdScoreSource
             == "raw"
@@ -731,6 +715,7 @@ class TrainingPipeline:
         return f"ma{windowSize}"
 
     def getThresholdName(self):
+        # Retorna o nome padronizado da estratégia de threshold utilizada.
         state = (
             self.threshold.getState()
         )
@@ -750,6 +735,7 @@ class TrainingPipeline:
         )
 
     def getNormalizerName(self):
+        # Retorna o nome padronizado do normalizador utilizado na execução.
         normalizerName = (
             self.normalizer
             .__class__
@@ -765,6 +751,7 @@ class TrainingPipeline:
         return normalizerName
 
     def getImputerName(self):
+        # Retorna o nome padronizado do imputador utilizado na execução.
         if hasattr(
             self.imputer,
             "name",
@@ -780,6 +767,7 @@ class TrainingPipeline:
         )
 
     def emptyMetricValues(self):
+        # Retorna métricas vazias para instâncias ainda não liberadas para avaliação.
         return {
             "tp": 0,
             "tn": 0,
@@ -806,6 +794,7 @@ class TrainingPipeline:
         }
 
     def resetComponents(self):
+        # Reinicia os componentes incrementais antes de uma nova execução completa.
         self.threshold.reset()
         self.imputer.reset()
         self.normalizer.reset()

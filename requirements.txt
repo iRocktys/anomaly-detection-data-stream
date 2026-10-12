@@ -11,3 +11,4 @@ optuna
 ipywidgets
 jupyter
 reportlab
+scipy

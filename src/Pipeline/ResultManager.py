@@ -40,7 +40,7 @@ class ResultManager:
         # Armazena uma linha de resultado produzida durante o processamento incremental da stream.
         if self.context is None:
             raise RuntimeError(
-                "O gerenciador de resultados deve ser iniciado antes da coleta."
+                "The result manager must be started before collection."
             )
 
         self.rows.append(row)
@@ -49,7 +49,7 @@ class ResultManager:
         # Finaliza a execução atual e encaminha os resultados acumulados para persistência.
         if self.context is None:
             raise RuntimeError(
-                "Nenhuma execução foi iniciada."
+                "No execution has been started."
             )
 
         context = self.context
@@ -79,7 +79,7 @@ class ResultManager:
         # Salva instâncias, métricas janeladas, métricas globais e gráficos usando um único contrato de resultados.
         if not rows:
             raise ValueError(
-                "Não existem resultados para salvar."
+                "There are no results to save."
             )
 
         instanceFrame = pd.DataFrame(
@@ -342,7 +342,7 @@ class ResultManager:
 
         if not safeName:
             raise ValueError(
-                "O nome do dataset não pode ser vazio."
+                "The dataset name cannot be empty."
             )
 
         return safeName
@@ -480,69 +480,44 @@ class ResultManager:
         movingAverageColumns,
         windowSize,
     ):
-        # Gera scores, FP/FN e métricas janeladas usando o mesmo instances.csv como fonte das regiões de ataque.
+        # Gera somente os gráficos compatíveis com as colunas produzidas pela tarefa atual.
         plotter = Plots()
+        instanceFrame = pd.read_csv(instancePath, nrows=5)
+        movingAverageColumns = list(movingAverageColumns or [])
+        plotPaths = {}
 
-        movingAverageColumns = list(
-            movingAverageColumns
-            or []
-        )
-
-        scoreLabels = [
-            (
-                "Média móvel "
-                f"({column.replace('scoreMa', '')})"
+        if {"rawScore", "score", "threshold"}.issubset(instanceFrame.columns):
+            scoreLabels = [f"Moving Average ({column.replace('scoreMa', '')})" for column in movingAverageColumns]
+            scoreColors = ["#5f86ad", "#f0a43a", "#6f2dbd", "#2a9d8f"]
+            plotPaths["scores"] = plotter.plotScoreArtifact(
+                instancePath,
+                outputPath=plotDirectory / "scores.png",
+                movingAverageColumns=movingAverageColumns,
+                movingAverageLabels=scoreLabels,
+                movingAverageColors=scoreColors,
+                showWarmup=True,
+                attackAlpha=0.30,
+                legendColumns=8,
             )
-            for column in movingAverageColumns
-        ]
 
-        scoreColors = [
-            "#5f86ad",
-            "#f0a43a",
-            "#6f2dbd",
-            "#2a9d8f",
-        ]
-
-        scorePath = plotter.plotScoreArtifact(
+        plotPaths["errors"] = plotter.plotWindowErrors(
+            windowPath,
+            attackSource=instancePath,
+            outputPath=plotDirectory / "fp_fn_windows.png",
+            windowSize=windowSize,
+            attackAlpha=0.30,
+            legendColumns=8,
+        )
+        plotPaths["metrics"] = plotter.plotWindowMetrics(
+            windowPath,
+            attackSource=instancePath,
+            outputPath=plotDirectory / "metrics_windows.png",
+            windowSize=windowSize,
+            attackAlpha=0.30,
+            legendColumns=8,
+        )
+        plotPaths["confusionMatrix"] = plotter.plotConfusionMatrix(
             instancePath,
-            outputPath=(
-                plotDirectory
-                / "scores.png"
-            ),
-            movingAverageColumns=movingAverageColumns,
-            movingAverageLabels=scoreLabels,
-            movingAverageColors=scoreColors,
-            showWarmup=True,
-            attackAlpha=0.30,
-            legendColumns=8,
+            outputPath=plotDirectory / "confusion_matrix.png",
         )
-
-        errorPath = plotter.plotWindowErrors(
-            windowPath,
-            attackSource=instancePath,
-            outputPath=(
-                plotDirectory
-                / "fp_fn_windows.png"
-            ),
-            windowSize=windowSize,
-            attackAlpha=0.30,
-            legendColumns=8,
-        )
-
-        metricsPath = plotter.plotWindowMetrics(
-            windowPath,
-            attackSource=instancePath,
-            outputPath=(
-                plotDirectory
-                / "metrics_windows.png"
-            ),
-            windowSize=windowSize,
-            attackAlpha=0.30,
-            legendColumns=8,
-        )
-
-        return {
-            "scores": scorePath,
-            "errors": errorPath,
-            "metrics": metricsPath,
-        }
+        return plotPaths

@@ -1,18 +1,47 @@
-# Detecção de Anomalias em Fluxos de Redes com Online Machine Learning (OML)
+# Anomaly Detection Data Stream
 
-Este estudo concentra-se na aplicação de técnicas de Online Machine Learning (OML) no contexto da Mineração de Fluxo de Dados (Data Stream Mining) para a detecção em tempo real de anomalias no fluxo de redes. O objetivo é demonstrar a capacidade de modelos de se adaptarem continuamente a dados não estacionários (conceito de Concept Drift).
+Projeto organizado com notebooks na raiz e implementação reutilizável em `src/`. O treinamento experimental é exclusivamente binário: `BENIGN/NORMAL = 0` e qualquer ataque = `1`.
 
-## Configuração de Ambiente no VS Code
+## Notebooks
 
-Caso prefira rodar o projeto localmente, siga estes passos para configurar seu ambiente virtual e instalar as dependências:
+- `DSPOT.ipynb`: estudo e inspeção do funcionamento incremental do DSPOT usando a mesma implementação do treinamento.
+- `AnomalyDetection.ipynb`: treinamento e avaliação dos detectores de anomalias.
+- `Classification.ipynb`: treinamento e avaliação prequential dos classificadores binários.
+- `Optimization.ipynb`: otimização Optuna para detectores ou classificadores.
+- `Scenarios.ipynb`: criação do baseline, blocos de ataque e cenários janelados.
+- `Similarity.ipynb`: análise estatística de similaridade entre tipos de ataque.
 
--   **Pré-requisito:** Certifique-se de que o **Python 3.10** (ou versão superior) esteja instalado e acessível no PATH do seu sistema.
--   **Clonar:** Clone o repositório para sua máquina.
--   **Abrir Projeto:** Abra a pasta raiz do repositório no **Visual Studio Code**.
--   **Criar Ambiente:**
-    -   Pressione **`F1`** (ou `Ctrl/Cmd + Shift + P`) para abrir a Paleta de Comandos.
-    -   Digite e selecione: **`Python: Create Environment`**.
--   **Instalação Rápida:**
-    -   Escolha seu gerenciador de ambiente (**Venv** ou **Conda**).
-    -   Selecione **`Quick Create`**. O VS Code fará o restante, instalando todas as bibliotecas listadas no `requirements.txt` no ambiente isolado.
+## Organização do backend
 
+- `src/Anomaly`: registry dos detectores.
+- `src/Classification`: registry dos classificadores binários.
+- `src/Data`: preparação da stream, imputação e normalização incremental.
+- `src/DSPOT`: estudo reutilizável do DSPOT.
+- `src/Experiment`: configuração e execução dos experimentos.
+- `src/Metrics`: métricas binárias incrementais.
+- `src/Optimization`: espaços de busca e execução do Optuna.
+- `src/Pipeline`: pipelines e persistência dos resultados.
+- `src/Plots`: implementação centralizada dos gráficos.
+- `src/Scenario`: janelamento e construção dos cenários.
+- `src/Scores`: médias móveis de scores.
+- `src/Similarity`: análise de similaridade entre ataques.
+- `src/Thresholds`: thresholds fixo e DSPOT.
+- `src/Training`: estratégias de treinamento incremental.
+
+Os gráficos gerados são persistidos dentro de `output/.../plots`; `src/Plots` contém somente código.
+
+## Compatibilidade
+
+O caminho já usado por `AnomalyDetection.ipynb` foi preservado:
+
+```python
+result = ExperimentRunner().run(
+    experimentName=experimentName,
+    datasets=datasets,
+    parameters=parameters,
+)
+```
+
+`binaryLabel=True` nos datasets e `binary_label=True` em `DataStreamProcessor.create_stream()` continuam aceitos por compatibilidade. Valores `False` são rejeitados porque toda execução experimental é obrigatoriamente binária.
+
+A criação de `LabeledInstance` tenta primeiro `capymoa.instance`, usado pela estrutura original do projeto, e utiliza `capymoa.core` apenas como fallback para versões que exponham a classe nesse módulo.

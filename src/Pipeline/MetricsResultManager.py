@@ -7,6 +7,7 @@ from src.Pipeline.ResultContracts import MetricsRunResult, PipelineRunContext
 
 class MetricsResultManager:
     def __init__(self):
+        # Inicializa o estado e as dependências necessárias para a execução da classe.
         self.context = None
         self.globalMetrics = IncrementalMetrics()
         self.windowMetrics = IncrementalMetrics()
@@ -18,6 +19,7 @@ class MetricsResultManager:
         self.windowStart = None
 
     def start(self, context: PipelineRunContext):
+        # Inicia o estado necessário para uma nova execução ou coleta de resultados.
         self.context = context
         self.globalMetrics.reset()
         self.windowMetrics.reset()
@@ -29,9 +31,10 @@ class MetricsResultManager:
         self.windowStart = None
 
     def collect(self, row):
+        # Coleta uma nova linha produzida durante o processamento da stream.
         if self.context is None:
             raise RuntimeError(
-                "O gerenciador de resultados deve ser iniciado antes da coleta."
+                "The result manager must be started before collection."
             )
 
         self.totalInstances += 1
@@ -56,12 +59,12 @@ class MetricsResultManager:
             self._closeWindow(instanceId)
 
     def finish(self):
+        # Finaliza o processamento atual e retorna os resultados consolidados.
         if self.context is None:
-            raise RuntimeError("Nenhuma execução foi iniciada.")
+            raise RuntimeError("No execution has been started.")
         if self.firstEvaluatedRow is None:
             raise ValueError(
-                "Não existem instâncias disponíveis após o warm-up para "
-                "calcular as métricas."
+                "No instances are available after warm-up to calculate metrics."
             )
         if self.windowMetrics.instances:
             self._closeWindow(self.lastEvaluatedInstance)
@@ -120,6 +123,7 @@ class MetricsResultManager:
         return result
 
     def _closeWindow(self, windowEnd):
+        # Fecha a janela de métricas atual e armazena seus valores consolidados.
         windowSnapshot = self.windowMetrics.snapshot()
         cumulativeSnapshot = self.globalMetrics.snapshot()
         window = {

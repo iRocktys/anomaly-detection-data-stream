@@ -3,10 +3,12 @@ from collections import deque
 
 class ScoreMovingAverages:
     def __init__(self, windowSizes=None):
+        # Inicializa o estado e as dependências necessárias para a execução da classe.
         self.windowSizes = self.validateWindowSizes(windowSizes)
         self.reset()
 
     def validateWindowSizes(self, windowSizes):
+        # Valida os tamanhos das médias móveis configuradas para os scores.
         if windowSizes is None:
             return []
 
@@ -18,6 +20,7 @@ class ScoreMovingAverages:
         return validatedSizes
 
     def calculate(self, score):
+        # Calcula o resultado correspondente aos valores recebidos pela rotina.
         score = float(score)
         self.history.append(score)
         averages = {}
@@ -29,5 +32,6 @@ class ScoreMovingAverages:
         return averages
 
     def reset(self):
+        # Reinicia o estado interno para permitir uma nova execução.
         maximumWindow = max(self.windowSizes, default=1)
         self.history = deque(maxlen=maximumWindow)

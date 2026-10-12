@@ -5,6 +5,7 @@ import pandas as pd
 
 
 def clean_column_name(name):
+    # Padroniza o nome da coluna para o formato utilizado pelo pipeline de cenários.
     name = str(name).strip()
     name = re.sub(
         r"[^A-Za-z0-9]+",
@@ -15,6 +16,7 @@ def clean_column_name(name):
 
 
 def canonical_label(series):
+    # Normaliza o rótulo original para a representação canônica usada no janelamento.
     labels = (
         series
         .astype(str)
@@ -44,6 +46,7 @@ def canonical_label(series):
 
 
 def normalize_columns(data):
+    # Padroniza os nomes das colunas necessárias antes do processamento dos fluxos.
     data = data.copy()
 
     data.columns = [
@@ -58,6 +61,7 @@ def prepare_flows(
     data,
     window,
 ):
+    # Prepara timestamps, janelas e rótulos canônicos dos fluxos carregados.
     data = normalize_columns(
         data
     )
@@ -115,6 +119,7 @@ def load_sample(
     sample_rows,
     window,
 ):
+    # Carrega e prepara uma amostra do CSV para inspeção do janelamento.
     skip_rows = (
         range(
             1,
@@ -152,6 +157,7 @@ def iter_prepared_chunks(
     window,
     chunk_size=100_000,
 ):
+    # Lê o CSV em chunks e entrega cada parte já preparada para janelamento.
     for chunk in pd.read_csv(
         csv_path,
         chunksize=chunk_size,

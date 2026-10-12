@@ -1,10 +1,11 @@
 import numpy as np
 import pandas as pd
 
-from src.feature_rules import FEATURE_RULES
+from src.Scenario.feature_rules import FEATURE_RULES
 
 
 def sum_values(values):
+    # Calcula a soma numérica dos valores válidos de uma feature na janela.
     return pd.to_numeric(
         values,
         errors="coerce",
@@ -12,6 +13,7 @@ def sum_values(values):
 
 
 def mean_values(values):
+    # Calcula a média aritmética dos valores válidos de uma feature na janela.
     return pd.to_numeric(
         values,
         errors="coerce",
@@ -19,6 +21,7 @@ def mean_values(values):
 
 
 def min_values(values):
+    # Obtém o menor valor numérico válido de uma feature na janela.
     return pd.to_numeric(
         values,
         errors="coerce",
@@ -26,6 +29,7 @@ def min_values(values):
 
 
 def max_values(values):
+    # Obtém o maior valor numérico válido de uma feature na janela.
     return pd.to_numeric(
         values,
         errors="coerce",
@@ -36,6 +40,7 @@ def weighted_mean(
     values,
     weights,
 ):
+    # Calcula a média ponderada de uma feature usando os pesos informados.
     values = pd.to_numeric(
         values,
         errors="coerce",
@@ -68,6 +73,7 @@ def pooled_std(
     mean_values_series,
     counts,
 ):
+    # Calcula o desvio-padrão combinado a partir das estatísticas dos fluxos.
     std_values = pd.to_numeric(
         std_values,
         errors="coerce",
@@ -141,6 +147,7 @@ def pooled_std(
 
 
 def add_helper_columns(data):
+    # Adiciona colunas auxiliares necessárias para as agregações estatísticas.
     data = data.copy()
 
     fwd = pd.to_numeric(
@@ -190,6 +197,7 @@ def add_helper_columns(data):
 def aggregate_window(
     started_flows,
 ):
+    # Agrega as features dos fluxos iniciados dentro de uma mesma janela.
     data = add_helper_columns(
         started_flows
     )
@@ -258,6 +266,7 @@ def aggregate_window(
 
 
 def rules_table(data):
+    # Monta uma tabela descritiva com as regras de agregação disponíveis.
     rows = []
 
     for feature, rule in FEATURE_RULES.items():

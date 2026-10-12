@@ -89,7 +89,7 @@ class AifSearchSpaceConfig:
                 or step < 1
             ):
                 raise ValueError(
-                    f"Intervalo inválido para {prefix}."
+                    f"Invalid range for {prefix}."
                 )
 
             if (
@@ -101,7 +101,7 @@ class AifSearchSpaceConfig:
                 % step
             ):
                 raise ValueError(
-                    f"O intervalo de {prefix} deve ser divisível pelo passo."
+                    f"O intervalo de {prefix} must be divisible by the step."
                 )
 
         if (
@@ -109,7 +109,7 @@ class AifSearchSpaceConfig:
             > defaults.DEFAULT_AIF_WARMUP_SIZE
         ):
             raise ValueError(
-                "windowSizeMaximum não pode superar o warm-up padrão do AIF."
+                "windowSizeMaximum cannot exceed the default AIF warm-up."
             )
 
         if not (
@@ -119,7 +119,7 @@ class AifSearchSpaceConfig:
             <= 1.0
         ):
             raise ValueError(
-                "O intervalo de weights deve estar entre 0 e 1."
+                "The weights range must be between 0 and 1."
             )
 
 
@@ -166,7 +166,7 @@ class AifSearchSpace:
             not in fixed
         ):
             raise ValueError(
-                "O warm-up do AIF é menor que a menor janela permitida."
+                "The AIF warm-up is smaller than the minimum allowed window."
             )
 
         parameters = {
@@ -269,7 +269,7 @@ class AifSearchSpace:
                 < minimum
             ):
                 raise ValueError(
-                    f"AIF: {name} deve ser inteiro >= {minimum}."
+                    f"AIF: {name} must be an integer >= {minimum}."
                 )
 
         height = parameters.get(
@@ -292,7 +292,7 @@ class AifSearchSpace:
             )
         ):
             raise ValueError(
-                "AIF: height deve ser None ou inteiro positivo."
+                "AIF: height must be None or a positive integer."
             )
 
         weights = parameters[
@@ -314,7 +314,7 @@ class AifSearchSpace:
             )
         ):
             raise ValueError(
-                "AIF: weights deve estar entre 0 e 1."
+                "AIF: weights must be between 0 and 1."
             )
 
         if (
@@ -326,5 +326,5 @@ class AifSearchSpace:
             )
         ):
             raise ValueError(
-                "A janela do AIF não pode superar seu warm-up."
+                "The AIF window cannot exceed its warm-up."
             )

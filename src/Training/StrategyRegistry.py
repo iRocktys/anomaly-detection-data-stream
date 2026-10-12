@@ -13,5 +13,5 @@ class TrainingStrategyRegistry:
         # Cria a estratégia de treinamento selecionada pelo experimento.
         key = str(name).strip().lower().replace("_", "").replace("-", "")
         if key not in cls.factories:
-            raise ValueError(f"Estratégia desconhecida: {name}. Disponíveis: {sorted(cls.factories)}")
+            raise ValueError(f"Unknown training strategy: {name}. Available: {sorted(cls.factories)}")
         return cls.factories[key](**dict(parameters or {}))

@@ -1,297 +1,283 @@
-# Regras explícitas para as features do CICFlowMeter.
-#
-# Source_IP, Destination_IP, Source_Port, Destination_Port e Protocol
-# NÃO são exportados para o CSV final. Eles são usados somente para
-# o cálculo das entropias de Shannon em entropy.py.
-#
-# Métodos:
-# sum            soma
-# mean           média aritmética
-# min            mínimo
-# max            máximo
-# weighted_mean  média ponderada
-# pooled_std     desvio-padrão combinado
-# variance       quadrado do pooled_std correspondente
 
 FEATURE_RULES = {
     "Flow_Duration": {
         "method": "mean",
-        "description": "Média das durações dos fluxos.",
+        "description": "Mean flow duration.",
     },
 
     "Total_Fwd_Packets": {
         "method": "sum",
-        "description": "Soma dos pacotes forward.",
+        "description": "Sum of forward packets.",
     },
     "Total_Backward_Packets": {
         "method": "sum",
-        "description": "Soma dos pacotes backward.",
+        "description": "Sum of backward packets.",
     },
     "Total_Length_of_Fwd_Packets": {
         "method": "sum",
-        "description": "Soma dos bytes forward.",
+        "description": "Sum of forward bytes.",
     },
     "Total_Length_of_Bwd_Packets": {
         "method": "sum",
-        "description": "Soma dos bytes backward.",
+        "description": "Sum of backward bytes.",
     },
 
     "Fwd_Packet_Length_Max": {
         "method": "max",
-        "description": "Maior comprimento de pacote forward.",
+        "description": "Maximum forward packet length.",
     },
     "Fwd_Packet_Length_Min": {
         "method": "min",
-        "description": "Menor comprimento de pacote forward.",
+        "description": "Minimum forward packet length.",
     },
     "Fwd_Packet_Length_Mean": {
         "method": "weighted_mean",
         "weight": "Total_Fwd_Packets",
-        "description": "Média ponderada pela quantidade de pacotes forward.",
+        "description": "Weighted mean by forward packet count.",
     },
     "Fwd_Packet_Length_Std": {
         "method": "pooled_std",
         "count": "Total_Fwd_Packets",
         "mean": "Fwd_Packet_Length_Mean",
-        "description": "Desvio-padrão combinado dos pacotes forward.",
+        "description": "Pooled standard deviation of forward packets.",
     },
 
     "Bwd_Packet_Length_Max": {
         "method": "max",
-        "description": "Maior comprimento de pacote backward.",
+        "description": "Maximum backward packet length.",
     },
     "Bwd_Packet_Length_Min": {
         "method": "min",
-        "description": "Menor comprimento de pacote backward.",
+        "description": "Minimum backward packet length.",
     },
     "Bwd_Packet_Length_Mean": {
         "method": "weighted_mean",
         "weight": "Total_Backward_Packets",
-        "description": "Média ponderada pela quantidade de pacotes backward.",
+        "description": "Weighted mean by backward packet count.",
     },
     "Bwd_Packet_Length_Std": {
         "method": "pooled_std",
         "count": "Total_Backward_Packets",
         "mean": "Bwd_Packet_Length_Mean",
-        "description": "Desvio-padrão combinado dos pacotes backward.",
+        "description": "Pooled standard deviation of backward packets.",
     },
 
     "Flow_Bytes_s": {
         "method": "weighted_mean",
         "weight": "Flow_Duration",
-        "description": "Média ponderada de Flow Bytes/s pela duração do fluxo.",
+        "description": "Flow Bytes/s weighted mean by flow duration.",
     },
     "Flow_Packets_s": {
         "method": "weighted_mean",
         "weight": "Flow_Duration",
-        "description": "Média ponderada de Flow Packets/s pela duração do fluxo.",
+        "description": "Flow Packets/s weighted mean by flow duration.",
     },
 
     "Flow_IAT_Mean": {
         "method": "weighted_mean",
         "weight": "__FlowIATCount",
-        "description": "Média ponderada pela quantidade estimada de Flow IATs.",
+        "description": "Weighted mean by estimated Flow IAT count.",
     },
     "Flow_IAT_Std": {
         "method": "pooled_std",
         "count": "__FlowIATCount",
         "mean": "Flow_IAT_Mean",
-        "description": "Desvio-padrão combinado dos Flow IATs.",
+        "description": "Pooled standard deviation of Flow IATs.",
     },
     "Flow_IAT_Max": {
         "method": "max",
-        "description": "Maior Flow IAT.",
+        "description": "Maximum Flow IAT.",
     },
     "Flow_IAT_Min": {
         "method": "min",
-        "description": "Menor Flow IAT.",
+        "description": "Minimum Flow IAT.",
     },
 
     "Fwd_IAT_Total": {
         "method": "sum",
-        "description": "Soma do Fwd IAT Total.",
+        "description": "Sum of Fwd IAT Total.",
     },
     "Fwd_IAT_Mean": {
         "method": "weighted_mean",
         "weight": "__FwdIATCount",
-        "description": "Média ponderada pelos intervalos forward estimados.",
+        "description": "Weighted mean by estimated forward intervals.",
     },
     "Fwd_IAT_Std": {
         "method": "pooled_std",
         "count": "__FwdIATCount",
         "mean": "Fwd_IAT_Mean",
-        "description": "Desvio-padrão combinado do Fwd IAT.",
+        "description": "Pooled standard deviation of Fwd IAT.",
     },
     "Fwd_IAT_Max": {
         "method": "max",
-        "description": "Maior Fwd IAT.",
+        "description": "Maximum Fwd IAT.",
     },
     "Fwd_IAT_Min": {
         "method": "min",
-        "description": "Menor Fwd IAT.",
+        "description": "Minimum Fwd IAT.",
     },
 
     "Bwd_IAT_Total": {
         "method": "sum",
-        "description": "Soma do Bwd IAT Total.",
+        "description": "Sum of Bwd IAT Total.",
     },
     "Bwd_IAT_Mean": {
         "method": "weighted_mean",
         "weight": "__BwdIATCount",
-        "description": "Média ponderada pelos intervalos backward estimados.",
+        "description": "Weighted mean by estimated backward intervals.",
     },
     "Bwd_IAT_Std": {
         "method": "pooled_std",
         "count": "__BwdIATCount",
         "mean": "Bwd_IAT_Mean",
-        "description": "Desvio-padrão combinado do Bwd IAT.",
+        "description": "Pooled standard deviation of Bwd IAT.",
     },
     "Bwd_IAT_Max": {
         "method": "max",
-        "description": "Maior Bwd IAT.",
+        "description": "Maximum Bwd IAT.",
     },
     "Bwd_IAT_Min": {
         "method": "min",
-        "description": "Menor Bwd IAT.",
+        "description": "Minimum Bwd IAT.",
     },
 
     "Fwd_PSH_Flags": {
         "method": "sum",
-        "description": "Soma das Fwd PSH Flags.",
+        "description": "Sum of Fwd PSH Flags.",
     },
     "Bwd_PSH_Flags": {
         "method": "sum",
-        "description": "Soma das Bwd PSH Flags.",
+        "description": "Sum of Bwd PSH Flags.",
     },
     "Fwd_URG_Flags": {
         "method": "sum",
-        "description": "Soma das Fwd URG Flags.",
+        "description": "Sum of Fwd URG Flags.",
     },
     "Bwd_URG_Flags": {
         "method": "sum",
-        "description": "Soma das Bwd URG Flags.",
+        "description": "Sum of Bwd URG Flags.",
     },
     "Fwd_Header_Length": {
         "method": "sum",
-        "description": "Soma do Fwd Header Length.",
+        "description": "Sum of Fwd Header Length.",
     },
     "Bwd_Header_Length": {
         "method": "sum",
-        "description": "Soma do Bwd Header Length.",
+        "description": "Sum of Bwd Header Length.",
     },
 
     "Fwd_Packets_s": {
         "method": "weighted_mean",
         "weight": "Flow_Duration",
-        "description": "Média ponderada de Fwd Packets/s pela duração.",
+        "description": "Fwd Packets/s weighted mean by flow duration.",
     },
     "Bwd_Packets_s": {
         "method": "weighted_mean",
         "weight": "Flow_Duration",
-        "description": "Média ponderada de Bwd Packets/s pela duração.",
+        "description": "Bwd Packets/s weighted mean by flow duration.",
     },
 
     "Min_Packet_Length": {
         "method": "min",
-        "description": "Menor comprimento de pacote.",
+        "description": "Minimum packet length.",
     },
     "Max_Packet_Length": {
         "method": "max",
-        "description": "Maior comprimento de pacote.",
+        "description": "Maximum packet length.",
     },
     "Packet_Length_Mean": {
         "method": "weighted_mean",
         "weight": "__TotalPackets",
-        "description": "Média ponderada pelo total de pacotes.",
+        "description": "Weighted mean by total packet count.",
     },
     "Packet_Length_Std": {
         "method": "pooled_std",
         "count": "__TotalPackets",
         "mean": "Packet_Length_Mean",
-        "description": "Desvio-padrão combinado do comprimento de pacote.",
+        "description": "Pooled standard deviation of packet length.",
     },
     "Packet_Length_Variance": {
         "method": "variance",
         "std": "Packet_Length_Std",
-        "description": "Variância derivada do desvio-padrão combinado.",
+        "description": "Variance derived from the pooled standard deviation.",
     },
 
     "FIN_Flag_Count": {
         "method": "sum",
-        "description": "Soma das FIN flags.",
+        "description": "Sum of FIN flags.",
     },
     "SYN_Flag_Count": {
         "method": "sum",
-        "description": "Soma das SYN flags.",
+        "description": "Sum of SYN flags.",
     },
     "RST_Flag_Count": {
         "method": "sum",
-        "description": "Soma das RST flags.",
+        "description": "Sum of RST flags.",
     },
     "PSH_Flag_Count": {
         "method": "sum",
-        "description": "Soma das PSH flags.",
+        "description": "Sum of PSH flags.",
     },
     "ACK_Flag_Count": {
         "method": "sum",
-        "description": "Soma das ACK flags.",
+        "description": "Sum of ACK flags.",
     },
     "URG_Flag_Count": {
         "method": "sum",
-        "description": "Soma das URG flags.",
+        "description": "Sum of URG flags.",
     },
     "CWE_Flag_Count": {
         "method": "sum",
-        "description": "Soma das CWE flags.",
+        "description": "Sum of CWE flags.",
     },
     "ECE_Flag_Count": {
         "method": "sum",
-        "description": "Soma das ECE flags.",
+        "description": "Sum of ECE flags.",
     },
 
     "Down_Up_Ratio": {
         "method": "mean",
-        "description": "Média do Down/Up Ratio dos fluxos.",
+        "description": "Mean Down/Up Ratio across flows.",
     },
     "Average_Packet_Size": {
         "method": "weighted_mean",
         "weight": "__TotalPackets",
-        "description": "Média ponderada pelo total de pacotes.",
+        "description": "Weighted mean by total packet count.",
     },
     "Avg_Fwd_Segment_Size": {
         "method": "weighted_mean",
         "weight": "Total_Fwd_Packets",
-        "description": "Média ponderada pelos pacotes forward.",
+        "description": "Weighted mean by forward packet count.",
     },
     "Avg_Bwd_Segment_Size": {
         "method": "weighted_mean",
         "weight": "Total_Backward_Packets",
-        "description": "Média ponderada pelos pacotes backward.",
+        "description": "Weighted mean by backward packet count.",
     },
 
     "Fwd_Avg_Bytes_Bulk": {
         "method": "mean",
-        "description": "Média entre os fluxos.",
+        "description": "Mean across flows.",
     },
     "Fwd_Avg_Packets_Bulk": {
         "method": "mean",
-        "description": "Média entre os fluxos.",
+        "description": "Mean across flows.",
     },
     "Fwd_Avg_Bulk_Rate": {
         "method": "mean",
-        "description": "Média entre os fluxos.",
+        "description": "Mean across flows.",
     },
     "Bwd_Avg_Bytes_Bulk": {
         "method": "mean",
-        "description": "Média entre os fluxos.",
+        "description": "Mean across flows.",
     },
     "Bwd_Avg_Packets_Bulk": {
         "method": "mean",
-        "description": "Média entre os fluxos.",
+        "description": "Mean across flows.",
     },
     "Bwd_Avg_Bulk_Rate": {
         "method": "mean",
-        "description": "Média entre os fluxos.",
+        "description": "Mean across flows.",
     },
 
     "Subflow_Fwd_Packets": {
@@ -313,11 +299,11 @@ FEATURE_RULES = {
 
     "Init_Win_bytes_forward": {
         "method": "mean",
-        "description": "Média da janela TCP inicial forward.",
+        "description": "Mean initial forward TCP window.",
     },
     "Init_Win_bytes_backward": {
         "method": "mean",
-        "description": "Média da janela TCP inicial backward.",
+        "description": "Mean initial backward TCP window.",
     },
     "act_data_pkt_fwd": {
         "method": "sum",
@@ -325,40 +311,40 @@ FEATURE_RULES = {
     },
     "min_seg_size_forward": {
         "method": "min",
-        "description": "Menor min segment size forward.",
+        "description": "Minimum forward segment size.",
     },
 
     "Active_Mean": {
         "method": "mean",
-        "description": "Média dos Active Mean dos fluxos.",
+        "description": "Mean of Active Mean across flows.",
     },
     "Active_Std": {
         "method": "mean",
-        "description": "Média dos Active Std dos fluxos.",
+        "description": "Mean of Active Std across flows.",
     },
     "Active_Max": {
         "method": "max",
-        "description": "Maior Active Max.",
+        "description": "Maximum Active Max.",
     },
     "Active_Min": {
         "method": "min",
-        "description": "Menor Active Min.",
+        "description": "Minimum Active Min.",
     },
 
     "Idle_Mean": {
         "method": "mean",
-        "description": "Média dos Idle Mean dos fluxos.",
+        "description": "Mean of Idle Mean across flows.",
     },
     "Idle_Std": {
         "method": "mean",
-        "description": "Média dos Idle Std dos fluxos.",
+        "description": "Mean of Idle Std across flows.",
     },
     "Idle_Max": {
         "method": "max",
-        "description": "Maior Idle Max.",
+        "description": "Maximum Idle Max.",
     },
     "Idle_Min": {
         "method": "min",
-        "description": "Menor Idle Min.",
+        "description": "Minimum Idle Min.",
     },
 }

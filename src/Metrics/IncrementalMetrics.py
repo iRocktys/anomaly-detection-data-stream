@@ -3,9 +3,11 @@ from src.Metrics.Metrics import Metrics
 
 class IncrementalMetrics:
     def __init__(self):
+        # Inicializa o estado e as dependências necessárias para a execução da classe.
         self.reset()
 
     def update(self, trueLabel, predictedLabel):
+        # Atualiza o estado incremental com os valores da instância atual.
         trueLabel = int(trueLabel)
         predictedLabel = int(predictedLabel)
 
@@ -40,6 +42,7 @@ class IncrementalMetrics:
         }
 
     def snapshot(self):
+        # Retorna uma cópia das métricas acumuladas no estado atual.
         return Metrics.fromCounts(
             tp=self.tp,
             tn=self.tn,
@@ -48,6 +51,7 @@ class IncrementalMetrics:
         )
 
     def reset(self):
+        # Reinicia o estado interno para permitir uma nova execução.
         self.instances = 0
         self.tp = 0
         self.tn = 0
@@ -55,4 +59,5 @@ class IncrementalMetrics:
         self.fn = 0
 
     def safeDivide(self, numerator, denominator):
+        # Executa uma divisão protegida contra denominadores iguais a zero.
         return Metrics.safeDivide(numerator, denominator)

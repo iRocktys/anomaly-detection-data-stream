@@ -12,21 +12,25 @@ class PlotBase:
     warmupColor = "#c7c7c7"
 
     def readFrame(self, source):
+        # Carrega o arquivo de resultados utilizado como fonte para o gráfico.
         if isinstance(source, pd.DataFrame):
             return source.copy()
 
         return pd.read_csv(source)
 
     def getXAxis(self, frame, column="instanceId"):
+        # Obtém o eixo horizontal usado para representar a evolução da stream.
         if column in frame.columns:
             return pd.to_numeric(frame[column], errors="coerce").to_numpy(dtype=float)
 
         return np.arange(len(frame), dtype=float)
 
     def numericSeries(self, values):
+        # Converte a coluna solicitada para uma série numérica válida para plotagem.
         return pd.to_numeric(values, errors="coerce").to_numpy(dtype=float)
 
     def addWarmup(self, axis, frame, xValues, showWarmup=True, warmupColumn="isWarmup", alpha=0.20):
+        # Adiciona ao gráfico a indicação visual da região de warm-up.
         if not showWarmup or warmupColumn not in frame.columns:
             return None
 
@@ -45,6 +49,7 @@ class PlotBase:
         return mpatches.Patch(facecolor=self.warmupColor, edgecolor="#8a8a8a", alpha=alpha, label="Warmup")
 
     def addAttackRegions(self, axis, attackSource, attackNameColumn="labelName", attackFlagColumn="isAttack", xColumn="instanceId", alpha=0.30):
+        # Adiciona ao gráfico as regiões em que o rótulo verdadeiro indica ataque.
         if attackSource is None:
             return []
 
@@ -57,9 +62,9 @@ class PlotBase:
         attackFlags = frame[attackFlagColumn].astype(bool).to_numpy()
 
         if attackNameColumn in frame.columns:
-            attackNames = frame[attackNameColumn].fillna("Ataque").astype(str).to_numpy()
+            attackNames = frame[attackNameColumn].fillna("Attack").astype(str).to_numpy()
         else:
-            attackNames = np.full(len(frame), "Ataque")
+            attackNames = np.full(len(frame), "Attack")
 
         regions = []
         start = None
@@ -106,6 +111,7 @@ class PlotBase:
         return handles
 
     def applyLegend(self, axis, handles, columns=8):
+        # Aplica uma legenda consolidada ao gráfico quando houver elementos rotulados.
         uniqueHandles = OrderedDict()
 
         for handle in handles:
@@ -123,6 +129,7 @@ class PlotBase:
         )
 
     def finish(self, fig, source, outputPath, defaultName, dpi=160):
+        # Finaliza o processamento atual e retorna os resultados consolidados.
         if outputPath is None:
             if isinstance(source, pd.DataFrame):
                 outputPath = Path(defaultName)
@@ -138,6 +145,7 @@ class PlotBase:
         return str(outputPath)
 
     def styleAxis(self, axis):
+        # Aplica os rótulos e ajustes visuais comuns ao eixo do gráfico.
         axis.grid(True, alpha=0.22, linewidth=0.7)
         axis.spines["top"].set_visible(False)
         axis.spines["right"].set_visible(False)
