@@ -1,647 +1,213 @@
-from dataclasses import asdict, replace
-import hashlib
 import json
+import re
+import unicodedata
+from pathlib import Path
 
 import pandas as pd
 
 from src.Anomaly.Models import ModelRegistry
-from src.Anomaly.Thresholds.Incremental.DspotThreshold import (
-    DspotCalibrationError,
-    DspotConfig,
-    DspotThreshold,
-)
-from src.Data.Processor import DataStreamProcessor
-from src.Data.Registries import (
-    ImputerRegistry,
-    NormalizerRegistry,
-)
+from src.Classification.Models import ClassifierRegistry
+from src.Data.DatasetLoader import DatasetLoader
+from src.Data.Registries import ImputerRegistry, NormalizerRegistry
+from src.Experiment.Configuration import deepMerge, mergeParameters
 from src.Optimization.AifSearchSpace import AifSearchSpace
+from src.Optimization.ClassifierSearchSpace import ClassifierSearchSpace
 from src.Optimization.DspotSearchSpace import DspotSearchSpace
-from src.Optimization.OptimizationConfig import (
-    OptimizationConfig,
-    PreparedDataset,
-)
-from src.Optimization.OptimizationExporter import OptimizationExporter
+from src.Optimization.OptimizationConfig import OptimizationConfig
+from src.Pipeline.AnomalyDetectionPipeline import AnomalyDetectionPipeline
+from src.Pipeline.ClassificationPipeline import ClassificationPipeline
 from src.Pipeline.MetricsResultManager import MetricsResultManager
-from src.Pipeline.TrainingPipeline import TrainingPipeline
+from src.Pipeline.ResultManager import ResultManager
+from src.Thresholds.Incremental.DspotThreshold import DspotCalibrationError
+from src.Thresholds.ThresholdRegistry import ThresholdRegistry
 from src.Training.StrategyRegistry import TrainingStrategyRegistry
 
 
 class OptunaStreamOptimizer:
-    def __init__(
-        self,
-        config,
-        searchSpace=None,
-        modelSearchSpace=None,
-    ):
-        # Inicializa a otimização conjunta do modelo, score e DSPOT usando F1 como único objetivo.
-        if not isinstance(
-            config,
-            OptimizationConfig,
-        ):
-            raise TypeError(
-                "config deve ser OptimizationConfig."
-            )
-
+    def __init__(self, config, dspotSearchSpace=None, aifSearchSpace=None, classifierSearchSpace=None):
+        # Inicializa o motor Optuna comum às tarefas binárias sem acoplar persistência aos trials intermediários.
+        if not isinstance(config, OptimizationConfig):
+            raise TypeError("config must be an OptimizationConfig.")
         self.config = config
-        self.parameters = (
-            config.effectiveParameters
-        )
-
-        self.modelCode = (
-            ModelRegistry.normalizeCode(
-                self.parameters[
-                    "model"
-                ][
-                    "code"
-                ]
-            )
-        )
-
-        self.searchSpace = (
-            searchSpace
-            or DspotSearchSpace(
-                config.dspotSearchSpace
-            )
-        )
-
-        self.modelSearchSpace = (
-            modelSearchSpace
-        )
-
-        if (
-            config.optimizeModelParameters
-            and self.modelSearchSpace is None
-            and self.modelCode
-            == "AIF"
-        ):
-            self.modelSearchSpace = (
-                AifSearchSpace(
-                    config.aifSearchSpace
-                )
-            )
+        self.dspotSearchSpace = dspotSearchSpace or DspotSearchSpace(config.dspotSearchSpace)
+        self.aifSearchSpace = aifSearchSpace or AifSearchSpace(config.aifSearchSpace)
+        self.classifierSearchSpace = classifierSearchSpace or ClassifierSearchSpace()
 
     def run(self):
-        # Executa trials até completar a quantidade solicitada de configurações válidas por dataset.
-        optuna = self._loadOptuna()
-
-        outputDirectory = (
-            self.config.outputRoot
-            / self.config.experimentName
-            / self.modelCode
-        )
-
-        outputDirectory.mkdir(
-            parents=True,
-            exist_ok=True,
-        )
-
-        databasePath = (
-            outputDirectory
-            / "optuna.db"
-        ).resolve()
-
-        storage = (
-            "sqlite:///"
-            + databasePath.as_posix()
-        )
-
-        exporter = OptimizationExporter(
-            outputDirectory,
-            self.config.topK,
-        )
-
-        studies = {}
-
-        prepared = {
-            dataset.name: self._prepareDataset(
-                dataset
+        # Otimiza cada dataset, salva todos os trials e reexecuta somente a melhor configuração com artefatos completos.
+        optuna = self.loadOptuna()
+        task_name = "AnomalyDetection" if self.config.task == "anomaly" else "Classification"
+        output_directory = self.config.outputRoot / self.normalizeName(self.config.experimentName) / task_name
+        output_directory.mkdir(parents=True, exist_ok=True)
+        best_results = {}
+        summary_rows = []
+        for dataset_config in self.config.datasetConfigs:
+            prepared_dataset = DatasetLoader.load(dataset_config, logging=False)
+            base_parameters = mergeParameters(self.config.effectiveParameters, dataset_config.parameters, task=self.config.task)
+            model_code = self.getModelCode(base_parameters)
+            print("\n" + "=" * 80)
+            print(f"Otimização: {prepared_dataset.name} | Tarefa: {task_name} | Modelo: {model_code}")
+            study = optuna.create_study(direction="maximize", sampler=optuna.samplers.TPESampler(seed=int(self.config.optunaSeed)))
+            self.optimizeStudy(study, prepared_dataset, base_parameters)
+            dataset_directory = output_directory / model_code / self.normalizeName(prepared_dataset.name)
+            dataset_directory.mkdir(parents=True, exist_ok=True)
+            trials_path = dataset_directory / "trials.csv"
+            study.trials_dataframe().to_csv(trials_path, index=False)
+            best_parameters = dict(study.best_trial.user_attrs["resolvedParameters"])
+            best_parameters_path = dataset_directory / "best_parameters.json"
+            best_parameters_path.write_text(json.dumps(best_parameters, indent=2, ensure_ascii=False), encoding="utf-8")
+            best_directory = dataset_directory / "Best"
+            final_result = self.runPipeline(
+                preparedDataset=prepared_dataset,
+                parameters=best_parameters,
+                resultManager=ResultManager(fixedRunDirectory=best_directory, overwriteFixedDirectory=True),
             )
-            for dataset in self.config.datasetConfigs
-        }
-
-        for datasetName, dataset in prepared.items():
-            studyName = self._studyName(
-                datasetName
-            )
-
-            study = optuna.create_study(
-                study_name=studyName,
-                storage=storage,
-                load_if_exists=True,
-                direction="maximize",
-                sampler=optuna.samplers.TPESampler(
-                    seed=int(
-                        self.config.optunaSeed
-                    )
-                ),
-            )
-
-            self._validateStudy(
-                study,
-                dataset,
-            )
-
-            initialComplete = self._countComplete(
-                study
-            )
-
-            targetComplete = (
-                initialComplete
-                + int(
-                    self.config.nTrials
-                )
-            )
-
-            maximumAttempts = (
-                int(
-                    self.config.nTrials
-                )
-                * int(
-                    self.config.maxTrialAttemptsMultiplier
-                )
-            )
-
-            attempts = 0
-
-            while (
-                self._countComplete(
-                    study
-                )
-                < targetComplete
-                and attempts
-                < maximumAttempts
-            ):
-                study.optimize(
-                    lambda trial: self._objective(
-                        trial,
-                        dataset,
-                        exporter,
-                    ),
-                    n_trials=1,
-                    gc_after_trial=True,
-                )
-
-                attempts += 1
-
-            completedNow = (
-                self._countComplete(
-                    study
-                )
-                - initialComplete
-            )
-
-            print(
-                f"{datasetName}: "
-                f"{completedNow}/{self.config.nTrials} trials válidos concluídos "
-                f"em {attempts} tentativas."
-            )
-
-            if (
-                completedNow
-                < int(
-                    self.config.nTrials
-                )
-            ):
-                print(
-                    "Aviso: o limite de tentativas foi atingido; "
-                    "a otimização seguirá com os trials válidos disponíveis."
-                )
-
-            studies[
-                datasetName
-            ] = study
-
-        exports = exporter.export(
-            studies
-        )
-
-        return {
-            "databasePath": str(
-                databasePath
-            ),
-            "studies": studies,
-            **exports,
-        }
-
-    def _countComplete(self, study):
-        # Conta somente trials COMPLETE com valor objetivo F1 disponível.
-        return sum(
-            1
-            for trial in study.trials
-            if (
-                getattr(
-                    trial.state,
-                    "name",
-                    str(
-                        trial.state
-                    ),
-                )
-                == "COMPLETE"
-                and trial.value is not None
-            )
-        )
-
-    def _studyName(self, datasetName):
-        # Monta o nome técnico versionado sem modificar o nome do experimento informado pelo usuário.
-        return (
-            f"{self.config.experimentName}"
-            f"__{datasetName}"
-            f"__{self.modelCode}"
-            f"__{self.config.studyVersion}"
-        )
-
-    def _validateStudy(self, study, dataset):
-        # Impede retomar um estudo com protocolo, dataset ou espaço de busca diferente.
-        payload = self._studyConfiguration(
-            dataset
-        )
-
-        signature = hashlib.sha256(
-            json.dumps(
-                payload,
-                sort_keys=True,
-                default=str,
-            ).encode(
-                "utf-8"
-            )
-        ).hexdigest()
-
-        storedSignature = (
-            study.user_attrs.get(
-                "configurationSignature"
-            )
-        )
-
-        hasTrials = (
-            len(
-                study.trials
-            )
-            > 0
-        )
-
-        if (
-            storedSignature is None
-            and hasTrials
-        ):
-            raise ValueError(
-                f"O estudo '{study.study_name}' já possui trials de outro protocolo. "
-                "Use uma nova studyVersion."
-            )
-
-        if (
-            storedSignature is not None
-            and storedSignature
-            != signature
-        ):
-            raise ValueError(
-                f"O estudo '{study.study_name}' foi criado com outra configuração. "
-                "Altere studyVersion para iniciar um estudo compatível."
-            )
-
-        if storedSignature is None:
-            study.set_user_attr(
-                "configurationSignature",
-                signature,
-            )
-
-            study.set_user_attr(
-                "configuration",
-                payload,
-            )
-
-            study.set_user_attr(
-                "experimentName",
-                self.config.experimentName,
-            )
-
-            study.set_user_attr(
-                "datasetKey",
-                dataset.name,
-            )
-
-            study.set_user_attr(
-                "modelCode",
-                self.modelCode,
-            )
-
-            study.set_user_attr(
-                "studyVersion",
-                self.config.studyVersion,
-            )
-
-    def _studyConfiguration(self, dataset):
-        # Constrói a assinatura completa do protocolo para impedir retomadas incompatíveis.
-        return {
-            "experimentName": self.config.experimentName,
-            "studyVersion": self.config.studyVersion,
-            "dataset": {
-                "name": dataset.name,
-                "path": str(
-                    dataset.datasetPath.resolve()
-                ),
-                "size": dataset.datasetPath.stat().st_size,
-                "modifiedNanoseconds": dataset.datasetPath.stat().st_mtime_ns,
-                "featureNames": list(
-                    dataset.featureNames
-                ),
-                "targetNames": list(
-                    dataset.targetNames
-                ),
-            },
-            "modelCode": self.modelCode,
-            "parameters": self.parameters,
-            "optunaSeed": int(
-                self.config.optunaSeed
-            ),
-            "optimizeModelParameters": bool(
-                self.config.optimizeModelParameters
-            ),
-            "fixedModelParameters": dict(
-                self.config.fixedModelParameters
-            ),
-            "aifSearchSpace": asdict(
-                self.config.aifSearchSpace
-            ),
-            "dspotSearchSpace": asdict(
-                self.config.dspotSearchSpace
-            ),
-        }
-
-    def _objective(self, trial, dataset, exporter):
-        # Executa uma configuração completa e retorna exclusivamente o F1-score quando ela é válida.
-        optuna = self._loadOptuna()
-
-        try:
-            configuration = (
-                self._suggestConfiguration(
-                    trial
-                )
-            )
-
-            exporter.recordIdentity(
-                trial,
-                dataset,
-                self.modelCode,
-            )
-
-            exporter.recordConfiguration(
-                trial,
-                configuration,
-                self.parameters,
-            )
-
-            result = self._createPipeline(
-                dataset,
-                configuration,
-            ).run()
-
-            exporter.recordResult(
-                trial,
-                result,
-            )
-
-            return float(
-                result.streamMetrics[
-                    "f1"
-                ]
-            )
-
-        except DspotCalibrationError as error:
-            raise optuna.TrialPruned(
-                str(
-                    error
-                )
-            ) from error
-
-    def _suggestConfiguration(self, trial):
-        # Sugere conjuntamente score, parâmetros DSPOT e parâmetros AIF respeitando os warm-ups fixos.
-        imputerName = self.parameters[
-            "preprocessing"
-        ][
-            "imputer"
-        ]
-
-        configuration = self.searchSpace.suggest(
-            trial,
-            imputerName=imputerName,
-        )
-
-        totalWarmup = int(
-            self.parameters[
-                "execution"
-            ][
-                "initialWarmupSize"
-            ]
-        )
-
-        modelWarmup = (
-            totalWarmup
-            - configuration.calibrationWindow
-        )
-
-        if modelWarmup <= 0:
-            raise ValueError(
-                "O warm-up do modelo deve ser maior que zero."
-            )
-
-        if self.modelSearchSpace is not None:
-            modelParameters = self.modelSearchSpace.suggest(
-                trial,
-                fixedParameters=self.config.fixedModelParameters,
-                modelWarmupSize=modelWarmup,
-            )
-
-        else:
-            modelParameters = {
-                **self.parameters[
-                    "model"
-                ].get(
-                    "parameters",
-                    {},
-                ),
-                **self.config.fixedModelParameters,
+            reexecution_f1 = float(final_result["streamMetricsFrame"].iloc[0]["f1"])
+            best_results[prepared_dataset.name] = {
+                "bestTrialNumber": int(study.best_trial.number),
+                "optimizationF1": float(study.best_value),
+                "reexecutionF1": reexecution_f1,
+                "trialsPath": str(trials_path),
+                "bestParametersPath": str(best_parameters_path),
+                "bestDirectory": str(best_directory),
+                "result": final_result,
             }
+            summary_rows.append({
+                "dataset": prepared_dataset.name,
+                "task": self.config.task,
+                "model": model_code,
+                "bestTrialNumber": int(study.best_trial.number),
+                "optimizationF1": float(study.best_value),
+                "reexecutionF1": reexecution_f1,
+                "trialsPath": str(trials_path),
+                "bestParametersPath": str(best_parameters_path),
+                "bestDirectory": str(best_directory),
+            })
+        summary = pd.DataFrame(summary_rows)
+        summary_path = output_directory / "best_results.csv"
+        summary.to_csv(summary_path, index=False)
+        return {
+            "task": self.config.task,
+            "experimentName": self.config.experimentName,
+            "outputDirectory": str(output_directory),
+            "bestResults": best_results,
+            "summary": summary,
+            "summaryPath": str(summary_path),
+        }
 
-        return replace(
-            configuration,
-            modelParameters=modelParameters,
-        )
+    def optimizeStudy(self, study, preparedDataset, baseParameters):
+        # Continua a busca até completar a quantidade solicitada de trials válidos ou atingir o limite de tentativas.
+        optuna = self.loadOptuna()
+        target = int(self.config.nTrials)
+        maximum_attempts = target * int(self.config.maxTrialAttemptsMultiplier)
+        attempts = 0
+        while self.countComplete(study, optuna) < target and attempts < maximum_attempts:
+            study.optimize(lambda trial: self.objective(trial, preparedDataset, baseParameters), n_trials=1, catch=())
+            attempts += 1
+        completed = self.countComplete(study, optuna)
+        if completed == 0:
+            raise RuntimeError("No valid trial was completed.")
+        if completed < target:
+            print(f"Aviso: foram concluídos {completed} de {target} trials válidos após {attempts} tentativas.")
 
-    def _prepareDataset(self, dataset):
-        # Carrega o dataset uma única vez e cria a stream reutilizada pelos trials.
-        if not dataset.path.exists():
-            raise FileNotFoundError(
-                f"Dataset não encontrado: {dataset.path}"
+    def objective(self, trial, preparedDataset, baseParameters):
+        # Constrói uma configuração candidata, executa a stream em memória e usa somente F1 como função objetivo.
+        optuna = self.loadOptuna()
+        try:
+            resolved = self.suggestParameters(trial, baseParameters)
+            trial.set_user_attr("resolvedParameters", resolved)
+            result = self.runPipeline(preparedDataset, resolved, MetricsResultManager())
+            value = float(result.streamMetrics["f1"])
+            if not pd.notna(value):
+                raise ValueError("Invalid F1 value in trial.")
+            return value
+        except (DspotCalibrationError, ValueError) as error:
+            raise optuna.TrialPruned(str(error)) from error
+
+    def suggestParameters(self, trial, baseParameters):
+        # Aplica somente os espaços específicos da tarefa sobre a configuração base já resolvida.
+        resolved = deepMerge(baseParameters, {})
+        model_code = self.getModelCode(resolved)
+        base_model = dict(resolved["model"].get("parameters", {}))
+        fixed_model = dict(self.config.fixedModelParameters)
+        if self.config.task == "anomaly":
+            threshold_name = str(resolved["threshold"]["name"]).strip().lower()
+            if threshold_name == "dspot":
+                resolved["threshold"] = self.dspotSearchSpace.suggest(trial)
+            if self.config.optimizeModelParameters and model_code == "AIF":
+                model_warmup = int(resolved["execution"]["initialWarmupSize"]) - int(self.config.dspotSearchSpace.calibrationWindow)
+                suggested_model = self.aifSearchSpace.suggest(trial, fixed_model, modelWarmupSize=model_warmup)
+                resolved["model"]["parameters"] = deepMerge(base_model, suggested_model)
+            else:
+                resolved["model"]["parameters"] = deepMerge(base_model, fixed_model)
+        else:
+            if self.config.optimizeModelParameters:
+                suggested_model = self.classifierSearchSpace.suggest(trial, model_code, fixed_model)
+                resolved["model"]["parameters"] = deepMerge(base_model, suggested_model)
+            else:
+                resolved["model"]["parameters"] = deepMerge(base_model, fixed_model)
+        return resolved
+
+    def runPipeline(self, preparedDataset, parameters, resultManager):
+        # Cria componentes novos para cada execução e delega ao pipeline binário correspondente à tarefa.
+        preprocessing = parameters["preprocessing"]
+        execution = parameters["execution"]
+        model = parameters["model"]
+        common = {
+            "stream": preparedDataset.stream,
+            "datasetName": preparedDataset.name,
+            "modelCode": model["code"],
+            "labelNames": preparedDataset.labelNames,
+            "modelParameters": model.get("parameters", {}),
+            "imputer": ImputerRegistry.create(preprocessing["imputer"], preprocessing.get("imputerParameters")),
+            "normalizer": NormalizerRegistry.create(preprocessing["normalizer"], preprocessing.get("normalizerParameters")),
+            "metricsWindowSize": int(execution["metricsWindowSize"]),
+            "seed": int(execution["seed"]),
+            "generatePlots": bool(execution.get("generatePlots", True)) if isinstance(resultManager, ResultManager) else False,
+            "initialWarmupSize": int(execution["initialWarmupSize"]),
+            "resultManager": resultManager,
+            "strictTrainingErrors": bool(execution.get("strictTrainingErrors", False)),
+        }
+        if self.config.task == "anomaly":
+            threshold_config = parameters["threshold"]
+            training_config = parameters["training"]
+            pipeline = AnomalyDetectionPipeline(
+                **common,
+                threshold=ThresholdRegistry.create(threshold_config["name"], threshold_config.get("parameters", {})),
+                trainingStrategy=TrainingStrategyRegistry.create(training_config["strategy"], training_config.get("parameters")),
+                scoreWindowSizes=tuple(threshold_config.get("scoreWindowSizes", ())),
+                thresholdScoreSource=threshold_config.get("scoreSource", "raw"),
             )
+        else:
+            pipeline = ClassificationPipeline(**common)
+        return pipeline.run()
 
-        dataframe = pd.read_csv(
-            dataset.path,
-            low_memory=False,
-        )
-
-        processor = DataStreamProcessor(
-            logging=False,
-            selected_features=dataset.selectedFeatures,
-            removed_features=dataset.removedFeatures,
-        )
-
-        (
-            stream,
-            targetNames,
-            featureNames,
-            labelNames,
-        ) = processor.create_stream(
-            dataframe,
-            target_label_col=dataset.targetColumn,
-            binary_label=dataset.binaryLabel,
-        )
-
-        labels = (
-            dataframe[
-                dataset.targetColumn
-            ]
-            .astype(
-                str
-            )
-            .str.strip()
-            .str.upper()
-        )
-
-        attackInstances = int(
-            (
-                ~labels.isin(
-                    [
-                        "BENIGN",
-                        "NORMAL",
-                    ]
-                )
-            ).sum()
-        )
-
-        return PreparedDataset(
-            name=dataset.name,
-            datasetPath=dataset.path,
-            stream=stream,
-            targetNames=tuple(
-                targetNames
-            ),
-            featureNames=tuple(
-                featureNames
-            ),
-            labelNames=tuple(
-                labelNames
-            ),
-            totalInstances=len(
-                dataframe
-            ),
-            attackInstances=attackInstances,
-            attackRatioPercent=(
-                100.0
-                * attackInstances
-                / len(
-                    dataframe
-                )
-            )
-            if len(
-                dataframe
-            )
-            else 0.0,
-        )
-
-    def _createPipeline(self, dataset, configuration):
-        # Cria o pipeline leve de cada trial com 500 instâncias para AIF e 500 para DSPOT.
-        threshold = DspotThreshold(
-            DspotConfig(
-                driftDepth=configuration.driftDepth,
-                calibrationSize=configuration.calibrationSize,
-                initialQuantile=configuration.initialQuantile,
-                risk=configuration.risk,
-                refitEvery=configuration.refitEvery,
-                optimizationStarts=configuration.optimizationStarts,
-                tolerance=configuration.tolerance,
-            )
-        )
-
-        preprocessing = self.parameters[
-            "preprocessing"
-        ]
-
-        training = self.parameters[
-            "training"
-        ]
-
-        execution = self.parameters[
-            "execution"
-        ]
-
-        return TrainingPipeline(
-            stream=dataset.stream,
-            datasetName=dataset.name,
-            modelCode=self.modelCode,
-            threshold=threshold,
-            labelNames=dataset.labelNames,
-            modelParameters=configuration.modelParameters,
-            imputer=ImputerRegistry.create(
-                configuration.imputerName,
-                preprocessing.get(
-                    "imputerParameters"
-                ),
-            ),
-            normalizer=NormalizerRegistry.create(
-                preprocessing[
-                    "normalizer"
-                ],
-                preprocessing.get(
-                    "normalizerParameters"
-                ),
-            ),
-            trainingStrategy=TrainingStrategyRegistry.create(
-                training[
-                    "strategy"
-                ],
-                training.get(
-                    "parameters"
-                ),
-            ),
-            scoreWindowSizes=configuration.scoreWindowSizes,
-            metricsWindowSize=int(
-                execution[
-                    "metricsWindowSize"
-                ]
-            ),
-            outputPath=self.config.outputRoot,
-            normalClassIndex=0,
-            seed=int(
-                execution[
-                    "seed"
-                ]
-            ),
-            generatePlots=False,
-            initialWarmupSize=int(
-                execution[
-                    "initialWarmupSize"
-                ]
-            ),
-            thresholdScoreSource=configuration.thresholdScoreSource,
-            resultManager=MetricsResultManager(),
-            strictTrainingErrors=bool(
-                execution.get(
-                    "strictTrainingErrors",
-                    False,
-                )
-            ),
-        )
+    def getModelCode(self, parameters):
+        # Normaliza o código do modelo com o registry apropriado à tarefa da otimização.
+        code = parameters["model"]["code"]
+        if self.config.task == "anomaly":
+            return ModelRegistry.normalizeCode(code)
+        return ClassifierRegistry.normalizeCode(code)
 
     @staticmethod
-    def _loadOptuna():
-        # Importa Optuna somente quando uma otimização é executada.
+    def countComplete(study, optuna):
+        # Conta apenas trials realmente concluídos para não confundir calibrações podadas com avaliações válidas.
+        return sum(trial.state == optuna.trial.TrialState.COMPLETE for trial in study.trials)
+
+    @staticmethod
+    def normalizeName(value):
+        # Converte um nome lógico em um componente ASCII seguro para caminhos de saída.
+        ascii_name = unicodedata.normalize("NFKD", str(value).strip()).encode("ascii", "ignore").decode("ascii")
+        safe_name = re.sub(r"[^A-Za-z0-9]+", "_", ascii_name).strip("_")
+        if not safe_name:
+            raise ValueError("Output path name cannot be empty.")
+        return safe_name
+
+    @staticmethod
+    def loadOptuna():
+        # Importa Optuna somente quando a rotina de otimização é efetivamente utilizada.
         try:
             import optuna
-
         except ImportError as error:
-            raise ImportError(
-                "Optuna não está instalado no ambiente."
-            ) from error
-
+            raise ImportError("Optuna is not installed in the environment.") from error
         return optuna

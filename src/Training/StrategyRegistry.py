@@ -10,8 +10,8 @@ class TrainingStrategyRegistry:
 
     @classmethod
     def create(cls, name, parameters=None):
-        # Cria a estratégia de treinamento selecionada pelo experimento.
+        # Cria a estratégia de treinamento online usada apenas pelos detectores de anomalias.
         key = str(name).strip().lower().replace("_", "").replace("-", "")
         if key not in cls.factories:
-            raise ValueError(f"Estratégia desconhecida: {name}. Disponíveis: {sorted(cls.factories)}")
+            raise ValueError(f"Unknown strategy: {name}. Available: {sorted(cls.factories)}")
         return cls.factories[key](**dict(parameters or {}))

@@ -1,4 +1,6 @@
+import json
 import re
+import shutil
 import unicodedata
 from pathlib import Path
 
@@ -6,506 +8,127 @@ import pandas as pd
 
 from src.Pipeline.ResultContracts import PipelineRunContext
 from src.Pipeline.ResultFrameBuilder import ResultFrameBuilder
-from src.Plots.Plots import Plots
+from src.Plots.PlotManager import PlotManager
 
 
 class ResultManager:
-    # Inicializa o gerenciador responsável por armazenar métricas, artefatos e diretórios de cada execução.
-    def __init__(self, outputPath="output"):
+    def __init__(self, outputPath="output", fixedRunDirectory=None, overwriteFixedDirectory=False):
+        # Inicializa o persistidor comum de resultados para detecção e classificação binárias.
         self.outputPath = Path(outputPath)
+        self.fixedRunDirectory = Path(fixedRunDirectory) if fixedRunDirectory is not None else None
+        self.overwriteFixedDirectory = bool(overwriteFixedDirectory)
         self.frameBuilder = ResultFrameBuilder()
         self.context = None
         self.rows = []
 
-    # Inicia uma nova execução e limpa qualquer estado acumulado anteriormente.
     def start(self, context: PipelineRunContext):
+        # Inicia uma nova execução e descarta qualquer resultado acumulado anteriormente.
         self.context = context
         self.rows = []
 
-    # Armazena uma linha de resultado produzida durante o processamento incremental da stream.
     def collect(self, row):
+        # Armazena uma linha produzida pelo pipeline para materialização ao final da stream.
         if self.context is None:
-            raise RuntimeError(
-                "O gerenciador de resultados deve ser iniciado antes da coleta."
-            )
+            raise RuntimeError("The result manager must be started before collection.")
+        self.rows.append(dict(row))
 
-        self.rows.append(row)
-
-    # Finaliza a execução atual e encaminha os resultados acumulados para persistência.
     def finish(self):
+        # Finaliza a execução atual e salva CSVs, metadados e gráficos em uma única estrutura.
         if self.context is None:
-            raise RuntimeError(
-                "Nenhuma execução foi iniciada."
-            )
-
+            raise RuntimeError("No execution was started.")
         context = self.context
         rows = self.rows
-
         self.context = None
         self.rows = []
+        return self.save(rows, context)
 
-        return self.save(
-            rows=rows,
-            datasetName=context.datasetName,
-            modelCode=context.modelCode,
-            windowSize=context.metricsWindowSize,
-            movingAverageColumns=context.movingAverageColumns,
-            generatePlots=context.generatePlots,
-        )
-
-    # Salva resultados por instância, por janela e globais, além de gerar os gráficos configurados.
-    def save(
-        self,
-        rows,
-        datasetName,
-        modelCode,
-        windowSize,
-        movingAverageColumns=None,
-        generatePlots=True,
-    ):
+    def save(self, rows, context):
+        # Persiste os artefatos de uma execução sem duplicar regras entre tarefas.
         if not rows:
-            raise ValueError(
-                "Não existem resultados para salvar."
+            raise ValueError("There are no results to save.")
+        instance_frame = pd.DataFrame(rows)
+        run_directory = self.createRunDirectory(context, instance_frame)
+        plot_directory = run_directory / "plots"
+        plot_directory.mkdir(parents=True, exist_ok=True)
+        instance_path = run_directory / "instances.csv"
+        window_path = run_directory / "windows.csv"
+        stream_metrics_path = run_directory / "stream_metrics.csv"
+        metadata_path = run_directory / "run_metadata.json"
+        window_frame = self.frameBuilder.buildWindowFrame(instance_frame, context.metricsWindowSize)
+        stream_metrics_frame = self.frameBuilder.buildStreamMetricsFrame(instance_frame)
+        instance_frame.to_csv(instance_path, index=False)
+        window_frame.to_csv(window_path, index=False)
+        stream_metrics_frame.to_csv(stream_metrics_path, index=False)
+        metadata = {
+            "task": context.task,
+            "dataset": context.datasetName,
+            "model": context.modelCode,
+            "metricsWindowSize": context.metricsWindowSize,
+            "movingAverageColumns": list(context.movingAverageColumns),
+            "columns": list(instance_frame.columns),
+        }
+        metadata_path.write_text(json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8")
+        plot_paths = {}
+        if context.generatePlots:
+            plot_paths = PlotManager().generate(
+                task=context.task,
+                instanceSource=instance_path,
+                windowSource=window_path,
+                outputDirectory=plot_directory,
+                movingAverageColumns=context.movingAverageColumns,
+                windowSize=context.metricsWindowSize,
             )
-
-        instanceFrame = pd.DataFrame(
-            rows
-        )
-
-        trainingName = self.normalizeTrainingName(
-            instanceFrame[
-                "trainingStrategy"
-            ].iloc[0]
-        )
-
-        thresholdName = self.normalizeThresholdName(
-            instanceFrame[
-                "thresholdStrategy"
-            ].iloc[0]
-        )
-
-        thresholdScoreName = self.normalizeThresholdScoreName(
-            instanceFrame[
-                "thresholdScoreSource"
-            ].iloc[0]
-        )
-
-        imputerName = self.normalizeImputerName(
-            instanceFrame[
-                "imputer"
-            ].iloc[0]
-        )
-
-        runDirectory = self.createRunDirectory(
-            modelCode=modelCode,
-            datasetName=datasetName,
-            trainingName=trainingName,
-            thresholdName=thresholdName,
-            thresholdScoreName=(
-                thresholdScoreName
-                if thresholdName == "DSPOT"
-                else None
-            ),
-            imputerName=imputerName,
-        )
-
-        plotDirectory = (
-            runDirectory
-            / "plots"
-        )
-
-        plotDirectory.mkdir(
-            parents=True,
-            exist_ok=True,
-        )
-
-        instancePath = (
-            runDirectory
-            / "instances.csv"
-        )
-
-        windowPath = (
-            runDirectory
-            / "windows.csv"
-        )
-
-        streamMetricsPath = (
-            runDirectory
-            / "stream_metrics.csv"
-        )
-
-        windowFrame = self.frameBuilder.buildWindowFrame(
-            instanceFrame,
-            windowSize,
-        )
-
-        streamMetricsFrame = (
-            self.frameBuilder.buildStreamMetricsFrame(
-                instanceFrame
-            )
-        )
-
-        instanceFrame.to_csv(
-            instancePath,
-            index=False,
-        )
-
-        windowFrame.to_csv(
-            windowPath,
-            index=False,
-        )
-
-        streamMetricsFrame.to_csv(
-            streamMetricsPath,
-            index=False,
-        )
-
-        plotPaths = {}
-
-        if generatePlots:
-            plotPaths = self.generatePlots(
-                instancePath=instancePath,
-                windowPath=windowPath,
-                plotDirectory=plotDirectory,
-                movingAverageColumns=movingAverageColumns,
-                windowSize=windowSize,
-            )
-
         return {
-            "runDirectory": str(
-                runDirectory
-            ),
-            "instancePath": str(
-                instancePath
-            ),
-            "windowPath": str(
-                windowPath
-            ),
-            "streamMetricsPath": str(
-                streamMetricsPath
-            ),
-            "plotDirectory": str(
-                plotDirectory
-            ),
-            "plotPaths": plotPaths,
-            "instanceFrame": instanceFrame,
-            "windowFrame": windowFrame,
-            "streamMetricsFrame": streamMetricsFrame,
+            "runDirectory": str(run_directory),
+            "instancePath": str(instance_path),
+            "windowPath": str(window_path),
+            "streamMetricsPath": str(stream_metrics_path),
+            "metadataPath": str(metadata_path),
+            "plotDirectory": str(plot_directory),
+            "plotPaths": plot_paths,
+            "instanceFrame": instance_frame,
+            "windowFrame": window_frame,
+            "streamMetricsFrame": stream_metrics_frame,
         }
 
-    # Cria uma pasta numerada para a execução usando o nome lógico do dataset e a configuração aplicada.
-    def createRunDirectory(
-        self,
-        modelCode,
-        datasetName,
-        trainingName,
-        thresholdName,
-        thresholdScoreName=None,
-        imputerName=None,
-    ):
-        modelDirectory = (
-            self.outputPath
-            / str(
-                modelCode
-            ).strip().upper()
-        )
+    def createRunDirectory(self, context, instanceFrame):
+        # Cria uma pasta numerada estável ou reutiliza o diretório fixo solicitado pela otimização.
+        if self.fixedRunDirectory is not None:
+            run_directory = self.fixedRunDirectory
+            if run_directory.exists() and self.overwriteFixedDirectory:
+                shutil.rmtree(run_directory)
+            run_directory.mkdir(parents=True, exist_ok=True)
+            return run_directory
+        model_directory = self.outputPath / self.normalizeName(context.modelCode)
+        dataset_directory = model_directory / self.normalizeName(context.datasetName)
+        dataset_directory.mkdir(parents=True, exist_ok=True)
+        existing_numbers = []
+        for path in dataset_directory.iterdir():
+            if path.is_dir() and path.name.split("-", 1)[0].isdigit():
+                existing_numbers.append(int(path.name.split("-", 1)[0]))
+        descriptor = self.buildRunDescriptor(context.task, instanceFrame)
+        run_name = f"{max(existing_numbers, default=0) + 1:03d}-{descriptor}"
+        run_directory = dataset_directory / run_name
+        run_directory.mkdir(parents=True, exist_ok=False)
+        return run_directory
 
-        modelDirectory.mkdir(
-            parents=True,
-            exist_ok=True,
-        )
+    def buildRunDescriptor(self, task, instanceFrame):
+        # Monta um identificador curto de execução com os componentes relevantes de cada tarefa.
+        parts = []
+        if "trainingStrategy" in instanceFrame.columns:
+            parts.append(self.normalizeName(instanceFrame["trainingStrategy"].iloc[0]))
+        if str(task).lower() == "anomaly":
+            for column in ("thresholdStrategy", "thresholdScoreSource"):
+                if column in instanceFrame.columns:
+                    parts.append(self.normalizeName(instanceFrame[column].iloc[0]))
+        if "imputer" in instanceFrame.columns:
+            parts.append(self.normalizeName(instanceFrame["imputer"].iloc[0]))
+        return "-".join(parts) if parts else "run"
 
-        datasetDirectory = (
-            modelDirectory
-            / self.normalizeDatasetName(
-                datasetName
-            )
-        )
-
-        datasetDirectory.mkdir(
-            parents=True,
-            exist_ok=True,
-        )
-
-        existingNumbers = []
-
-        for path in datasetDirectory.iterdir():
-            if not path.is_dir():
-                continue
-
-            prefix = path.name.split(
-                "-",
-                1,
-            )[0]
-
-            if prefix.isdigit():
-                existingNumbers.append(
-                    int(
-                        prefix
-                    )
-                )
-
-        directoryParts = [
-            f"{max(existingNumbers, default=0) + 1:03d}",
-            trainingName,
-            thresholdName,
-        ]
-
-        if thresholdScoreName:
-            directoryParts.append(
-                thresholdScoreName
-            )
-
-        if imputerName:
-            directoryParts.append(
-                imputerName
-            )
-
-        runDirectory = (
-            datasetDirectory
-            / "-".join(
-                directoryParts
-            )
-        )
-
-        runDirectory.mkdir(
-            parents=True,
-            exist_ok=False,
-        )
-
-        return runDirectory
-
-    # Sanitiza somente o nome lógico informado para o dataset sem aplicar aliases específicos de cenários.
-    def normalizeDatasetName(
-        self,
-        datasetName,
-    ):
-        datasetStem = Path(
-            str(
-                datasetName
-            ).strip()
-        ).stem
-
-        asciiName = (
-            unicodedata.normalize(
-                "NFKD",
-                datasetStem,
-            )
-            .encode(
-                "ascii",
-                "ignore",
-            )
-            .decode(
-                "ascii"
-            )
-        )
-
-        safeName = re.sub(
-            r"[^A-Za-z0-9]+",
-            "_",
-            asciiName,
-        ).strip(
-            "_"
-        )
-
-        if not safeName:
-            raise ValueError(
-                "O nome do dataset não pode ser vazio."
-            )
-
-        return safeName
-
-    # Normaliza o nome da estratégia de treinamento para uso consistente nos diretórios de saída.
-    def normalizeTrainingName(
-        self,
-        trainingStrategy,
-    ):
-        value = str(
-            trainingStrategy
-        ).strip().lower()
-
-        if value == "all":
-            return "ALL"
-
-        if value in {
-            "belowthreshold",
-            "predicttrue",
-            "predict_true",
-        }:
-            return "PREDICT_TRUE"
-
-        return value.upper()
-
-    # Normaliza o nome da estratégia de threshold para uso consistente nos artefatos de execução.
-    def normalizeThresholdName(
-        self,
-        thresholdStrategy,
-    ):
-        value = str(
-            thresholdStrategy
-        ).strip().lower()
-
-        if value == "fixed":
-            return "FIXED"
-
-        if value == "dspot":
-            return "DSPOT"
-
-        return value.upper()
-
-    # Normaliza a origem do score usada pelo threshold para diferenciar score bruto e médias móveis.
-    def normalizeThresholdScoreName(
-        self,
-        thresholdScoreSource,
-    ):
-        value = str(
-            thresholdScoreSource
-        ).strip()
-
-        if value.lower() == "raw":
-            return "RAW"
-
-        if value.lower().startswith(
-            "scorema"
-        ):
-            return (
-                f"MA"
-                f"{value[len('scoreMa'):]}"
-            )
-
-        return value.upper()
-
-    # Normaliza o nome do imputador para manter nomes curtos e consistentes nas pastas de resultado.
-    def normalizeImputerName(
-        self,
-        imputer,
-    ):
-        value = (
-            str(
-                imputer
-            )
-            .strip()
-            .lower()
-            .replace(
-                "_",
-                "",
-            )
-            .replace(
-                "-",
-                "",
-            )
-        )
-
-        if value in {
-            "incrementalmean",
-            "mean",
-            "media",
-            "média",
-        }:
-            return "MEAN"
-
-        return value.upper()
-
-    # Constrói a tabela de métricas por janela a partir dos resultados individuais da stream.
-    def buildWindowFrame(
-        self,
-        instanceFrame,
-        windowSize,
-    ):
-        return self.frameBuilder.buildWindowFrame(
-            instanceFrame,
-            windowSize,
-        )
-
-    # Constrói as métricas globais da execução a partir das instâncias avaliadas.
-    def buildStreamMetricsFrame(
-        self,
-        instanceFrame,
-    ):
-        return self.frameBuilder.buildStreamMetricsFrame(
-            instanceFrame
-        )
-
-    # Retorna somente as instâncias pertencentes à região efetivamente avaliada da stream.
-    def selectEvaluatedFrame(
-        self,
-        instanceFrame,
-    ):
-        return self.frameBuilder.selectEvaluatedFrame(
-            instanceFrame
-        )
-
-    # Gera os gráficos de scores, erros e métricas janeladas associados à execução atual.
-    def generatePlots(
-        self,
-        instancePath,
-        windowPath,
-        plotDirectory,
-        movingAverageColumns,
-        windowSize,
-    ):
-        plotter = Plots()
-
-        movingAverageColumns = list(
-            movingAverageColumns
-            or []
-        )
-
-        scoreLabels = [
-            (
-                "Média móvel "
-                f"({column.replace('scoreMa', '')})"
-            )
-            for column in movingAverageColumns
-        ]
-
-        scoreColors = [
-            "#5f86ad",
-            "#f0a43a",
-            "#6f2dbd",
-            "#2a9d8f",
-        ]
-
-        scorePath = plotter.plotScoreArtifact(
-            instancePath,
-            outputPath=(
-                plotDirectory
-                / "scores.png"
-            ),
-            movingAverageColumns=movingAverageColumns,
-            movingAverageLabels=scoreLabels,
-            movingAverageColors=scoreColors,
-            showWarmup=True,
-            attackAlpha=0.30,
-            legendColumns=8,
-        )
-
-        errorPath = plotter.plotWindowErrors(
-            windowPath,
-            attackSource=instancePath,
-            outputPath=(
-                plotDirectory
-                / "fp_fn_windows.png"
-            ),
-            windowSize=windowSize,
-            attackAlpha=0.30,
-            legendColumns=8,
-        )
-
-        metricsPath = plotter.plotWindowMetrics(
-            windowPath,
-            attackSource=instancePath,
-            outputPath=(
-                plotDirectory
-                / "metrics_windows.png"
-            ),
-            windowSize=windowSize,
-            attackAlpha=0.30,
-            legendColumns=8,
-        )
-
-        return {
-            "scores": scorePath,
-            "errors": errorPath,
-            "metrics": metricsPath,
-        }
+    def normalizeName(self, value):
+        # Sanitiza nomes lógicos para utilização segura em caminhos de saída.
+        ascii_name = unicodedata.normalize("NFKD", str(value).strip()).encode("ascii", "ignore").decode("ascii")
+        safe_name = re.sub(r"[^A-Za-z0-9]+", "_", ascii_name).strip("_")
+        if not safe_name:
+            raise ValueError("The name used in the output path cannot be empty.")
+        return safe_name

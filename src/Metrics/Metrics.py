@@ -21,37 +21,26 @@ class Metrics:
 
     @staticmethod
     def calculate(yTrue, yPred):
-        trueValues = np.asarray(yTrue, dtype=int)
-        predictedValues = np.asarray(yPred, dtype=int)
-        if trueValues.shape != predictedValues.shape:
-            raise ValueError("yTrue e yPred devem possuir o mesmo tamanho.")
-
-        tp = int(np.sum((trueValues == 1) & (predictedValues == 1)))
-        tn = int(np.sum((trueValues == 0) & (predictedValues == 0)))
-        fp = int(np.sum((trueValues == 0) & (predictedValues == 1)))
-        fn = int(np.sum((trueValues == 1) & (predictedValues == 0)))
-
-        return Metrics.fromCounts(
-            tp=tp,
-            tn=tn,
-            fp=fp,
-            fn=fn,
-        )
+        # Calcula a matriz de confusão e todas as métricas para rótulos binários 0 e 1.
+        true_values = np.asarray(yTrue, dtype=int)
+        predicted_values = np.asarray(yPred, dtype=int)
+        if true_values.shape != predicted_values.shape:
+            raise ValueError("yTrue and yPred must have the same length.")
+        if np.any(~np.isin(true_values, [0, 1])) or np.any(~np.isin(predicted_values, [0, 1])):
+            raise ValueError("Metrics accept only binary labels 0 and 1.")
+        tp = int(np.sum((true_values == 1) & (predicted_values == 1)))
+        tn = int(np.sum((true_values == 0) & (predicted_values == 0)))
+        fp = int(np.sum((true_values == 0) & (predicted_values == 1)))
+        fn = int(np.sum((true_values == 1) & (predicted_values == 0)))
+        return Metrics.fromCounts(tp, tn, fp, fn)
 
     @staticmethod
     def fromCounts(tp, tn, fp, fn):
-        tp = int(tp)
-        tn = int(tn)
-        fp = int(fp)
-        fn = int(fn)
-
+        # Converte contagens binárias em accuracy, precision, recall, specificity, F1 e MCC.
+        tp, tn, fp, fn = int(tp), int(tn), int(fp), int(fn)
         if min(tp, tn, fp, fn) < 0:
-            raise ValueError(
-                "Os valores da matriz de confusão não podem ser negativos."
-            )
-
+            raise ValueError("Confusion matrix values cannot be negative.")
         total = tp + tn + fp + fn
-
         precision = Metrics.safeDivide(tp, tp + fp)
         recall = Metrics.safeDivide(tp, tp + fn)
         specificity = Metrics.safeDivide(tn, tn + fp)
@@ -59,7 +48,6 @@ class Metrics:
         f1 = Metrics.safeDivide(2.0 * precision * recall, precision + recall)
         denominator = math.sqrt((tp + fp) * (tp + fn) * (tn + fp) * (tn + fn))
         mcc = Metrics.safeDivide((tp * tn) - (fp * fn), denominator)
-
         return {
             "instances": total,
             "tp": tp,
@@ -75,57 +63,33 @@ class Metrics:
         }
 
     @staticmethod
-    def evaluateFrame(frame, trueColumn="isAttack", predictionColumn="prediction", readyColumn=None):
+    def evaluateFrame(frame, trueColumn="isAttack", predictionColumn="predictedLabel", readyColumn="evaluationReady"):
+        # Avalia um DataFrame binário respeitando opcionalmente a máscara de instâncias avaliáveis.
         selected = frame
         if readyColumn and readyColumn in selected.columns:
             selected = selected[selected[readyColumn].astype(bool)]
+        if selected.empty:
+            return Metrics.fromCounts(0, 0, 0, 0)
         return Metrics.calculate(selected[trueColumn], selected[predictionColumn])
 
     @staticmethod
-    def windowed(frame, windowSize=1000, trueColumn="isAttack", predictionColumn="prediction", readyColumn=None):
-        windowSize = max(1, int(windowSize))
+    def windowed(frame, windowSize=100, trueColumn="isAttack", predictionColumn="predictedLabel", readyColumn="evaluationReady"):
+        # Calcula métricas binárias independentes em blocos sequenciais de tamanho fixo.
+        selected = frame
+        if readyColumn and readyColumn in selected.columns:
+            selected = selected[selected[readyColumn].astype(bool)].reset_index(drop=True)
+        window_size = max(1, int(windowSize))
         rows = []
-        for start in range(0, len(frame), windowSize):
-            end = min(start + windowSize, len(frame))
-            window = frame.iloc[start:end]
-            if readyColumn and readyColumn in window.columns:
-                window = window[window[readyColumn].astype(bool)]
-            summary = Metrics.calculate(window[trueColumn], window[predictionColumn])
-            summary.update({
-                "windowStart": int(start),
-                "windowEnd": int(end - 1),
-            })
-            rows.append(summary)
-        columns = ["windowStart", "windowEnd"] + Metrics.metricNames
-        return pd.DataFrame(rows, columns=columns)
-
-
-    @staticmethod
-    def attackBreakdown(frame, labelColumn="trueLabel", nameColumn="labelName", predictionColumn="prediction", normalClassIndex=0):
-        rows = []
-        if labelColumn not in frame.columns:
-            return rows
-        for labelValue, group in frame.groupby(labelColumn, sort=True):
-            labelValue = int(labelValue)
-            if labelValue == int(normalClassIndex):
+        for start in range(0, len(selected), window_size):
+            window = selected.iloc[start:start + window_size]
+            if window.empty:
                 continue
-            labelName = (
-                str(group[nameColumn].iloc[0])
-                if nameColumn in group.columns and not group.empty
-                else str(labelValue)
-            )
-            total = int(len(group))
-            detected = int((group[predictionColumn].astype(int) == 1).sum())
-            rows.append({
-                "trueLabel": labelValue,
-                "labelName": labelName,
-                "instances": total,
-                "detected": detected,
-                "falseNegatives": total - detected,
-                "recall": Metrics.safeDivide(detected, total),
-            })
-        return rows
+            summary = Metrics.calculate(window[trueColumn], window[predictionColumn])
+            summary.update({"windowStart": int(start), "windowEnd": int(start + len(window) - 1)})
+            rows.append(summary)
+        return pd.DataFrame(rows, columns=["windowStart", "windowEnd"] + Metrics.metricNames)
 
     @staticmethod
     def safeDivide(numerator, denominator):
+        # Executa divisão segura retornando zero quando o denominador é nulo.
         return float(numerator / denominator) if denominator else 0.0
