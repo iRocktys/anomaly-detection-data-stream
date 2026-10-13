@@ -16,7 +16,7 @@ class ScorePlot(PlotBase):
         self,
         source,
         outputPath=None,
-        title="Scores, Moving Averages and Causal Threshold",
+        title="Scores, Moving Averages and Threshold",
         rawScoreColumn="rawScore",
         scoreColumn="score",
         thresholdColumn="threshold",

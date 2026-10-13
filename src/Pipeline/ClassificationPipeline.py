@@ -1,5 +1,6 @@
 import numpy as np
 
+import ProjectDefaults as defaults
 from src.Classification.Models import ClassifierRegistry
 from src.Data.OnlineImputers import IncrementalMeanImputer
 from src.Data.OnlineNormalizers import IncrementalZScoreNormalizer
@@ -39,7 +40,7 @@ class ClassificationPipeline:
         self.metricsWindowSize = max(1, int(metricsWindowSize))
         self.seed = int(seed)
         self.generatePlots = bool(generatePlots)
-        self.initialWarmupSize = max(0, int(initialWarmupSize))
+        self.initialWarmupSize = int(defaults.DEFAULT_INITIAL_WARMUP_SIZE)
         self.resultManager = resultManager if resultManager is not None else ResultManager(outputPath)
         self.strictTrainingErrors = bool(strictTrainingErrors)
         if not isinstance(self.resultManager, ResultManagerProtocol):
@@ -110,7 +111,7 @@ class ClassificationPipeline:
         if true_label not in (0, 1):
             raise ValueError("The classification pipeline accepts only binary labels 0 and 1.")
         is_warmup = instanceIndex < self.initialWarmupSize
-        evaluation_ready = bool(prediction_available and not is_warmup)
+        evaluation_ready = bool(not is_warmup)
         metric_values = self.metrics.update(true_label, predicted_label) if evaluation_ready else self.emptyMetricValues()
         attack_probability = self.getAttackProbability(model_instance)
         was_trained = self.trainModel(model_instance)
