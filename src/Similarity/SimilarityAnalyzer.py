@@ -15,6 +15,10 @@ class SimilarityAnalyzer:
         missing = [feature for feature in features if feature not in frame.columns]
         if missing:
             raise KeyError(f"Missing Mahalanobis features: {missing}")
+        if not features or not np.isfinite(frame[features].to_numpy(dtype=float)).all():
+            raise ValueError("Mahalanobis requires finite features. Check imputation and feature selection settings.")
+        if frame["Attack"].nunique() < 2:
+            raise ValueError("Similarity requires at least two attacks.")
         return frame, features
 
     def calculateCentroids(self, standardizedFrame, features):

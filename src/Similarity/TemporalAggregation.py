@@ -16,9 +16,11 @@ class SimilarityTemporalAggregator:
         "Protocol": "UniqueProtocols",
     }
 
-    def __init__(self, windowSeconds=0.5, labelColumn="Label", normalLabels=None, fillEmptyWindows=True, noFlowLabel="NOLABEL"):
+    def __init__(self, windowSeconds=1.0, labelColumn="Label", normalLabels=None, fillEmptyWindows=True, noFlowLabel="NOLABEL"):
         # Inicializa a agregação temporal pelo término do fluxo e define o rótulo exclusivo para janelas sem fluxo.
         self.windowSeconds = float(windowSeconds)
+        if not np.isfinite(self.windowSeconds) or self.windowSeconds <= 0:
+            raise ValueError("windowSeconds must be positive and finite.")
         self.windowFrequency = pd.to_timedelta(self.windowSeconds, unit="s")
         self.labelColumn = str(labelColumn)
         self.normalLabels = {str(value).strip().upper() for value in (normalLabels or ["BENIGN", "NORMAL", "0"])}
@@ -84,6 +86,8 @@ class SimilarityTemporalAggregator:
         mode_value = str(mode).strip().lower()
         if mode_value not in {"attack_only", "mixed_traffic"}:
             raise ValueError("mode must be 'attack_only' or 'mixed_traffic'.")
+        labels = data[self.labelColumn].astype(str).str.strip().str.upper()
+        data = data.loc[labels.isin(self.normalLabels | {target})].copy()
         if mode_value == "attack_only":
             data = data.loc[data[self.labelColumn].astype(str).str.upper() == target].copy()
         data = data.loc[(data["FlowEnd"] >= cutStart) & (data["FlowEnd"] < cutEnd)].copy()
@@ -118,12 +122,15 @@ class SimilarityTemporalAggregator:
                 raise FileNotFoundError(f"Cut file was not found: {cut_path}")
             cut = pd.read_csv(cut_path, low_memory=False)
             cut["FlowEnd"] = pd.to_datetime(cut["FlowEnd"], errors="coerce")
+            labels = cut[self.labelColumn].astype(str).str.strip().str.upper()
+            excluded_other = int((~labels.isin(self.normalLabels | {attack})).sum())
             frame = self.aggregateAttack(cut, attack, pd.Timestamp(row.CutStart), pd.Timestamp(row.CutEnd), mode=mode)
-            frame.to_csv(per_attack_directory / f"{attack}_0_5s.csv", index=False)
+            frame.to_csv(per_attack_directory / f"{attack}_{self.windowSeconds:g}s.csv", index=False)
             frames.append(frame)
             summaries.append({
                 "Attack": attack,
                 "Mode": mode,
+                "ExcludedOtherAttackFlows": excluded_other,
                 "WindowCount": int(len(frame)),
                 "AttackWindows": int((frame["Label"] == attack).sum()),
                 "BenignWindows": int((frame["Label"] == "BENIGN").sum()),

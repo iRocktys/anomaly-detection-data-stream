@@ -7,220 +7,168 @@ from sklearn.preprocessing import StandardScaler
 
 
 class SimilarityPreprocessor:
-    metadataColumns = {"Timestamp", "Attack", "Label"}
+    """Preparação em lote; None desativa cada técnica opcional explicitamente."""
+
+    metadataColumns = {"Timestamp", "Attack", "Label", "OriginalTimestamp", "FlowStart", "FlowEnd",
+                       "OriginalFlowStart", "OriginalFlowEnd", "SourceFile", "SourceRow", "BlockIndex",
+                       "StreamIndex", "WindowIndex", "ScenarioPart", "AttackBlock",
+                       "Flow_ID", "Source_IP", "Destination_IP", "SimillarHTTP"}
     diagnosticColumns = {"AttackCount", "BenignCount", "OtherAttackCount", "AttackRatio"}
 
-    def __init__(self, nearConstantRatio=0.999, correlationThreshold=0.995, randomSeed=42, missingDisplayThreshold=30.0, noFlowLabel="NOLABEL"):
-        # Inicializa balanceamento, diagnóstico de ausências, limpeza de features e padronização global em lote.
-        self.nearConstantRatio = float(nearConstantRatio)
-        self.correlationThreshold = float(correlationThreshold)
-        self.randomSeed = int(randomSeed)
-        self.missingDisplayThreshold = float(missingDisplayThreshold)
-        self.noFlowLabel = str(noFlowLabel).strip().upper()
+    def __init__(self, nearConstantRatio=0.999, correlationThreshold=0.995, randomSeed=42,
+                 missingDisplayThreshold=30.0, noFlowLabel="NOLABEL", downsample="random",
+                 removeZeroColumns=True, removeAllMissingColumns=True, removeConstantColumns=True,
+                 imputation="median", normalization="standard", sampleUnit="window"):
+        if downsample not in (None, "random"):
+            raise ValueError("downsample must be 'random' or None.")
+        if imputation not in (None, "median") or normalization not in (None, "standard"):
+            raise ValueError("Use imputation='median'/None and normalization='standard'/None.")
+        for name, value in (("nearConstantRatio", nearConstantRatio), ("correlationThreshold", correlationThreshold)):
+            if value is not None and not 0 < value <= 1:
+                raise ValueError(f"{name} must be in (0, 1] or None.")
+        for value in (removeZeroColumns, removeAllMissingColumns, removeConstantColumns):
+            if value is not True and value is not None:
+                raise ValueError("Removal options accept True or None.")
+        if missingDisplayThreshold is not None and not 0 <= missingDisplayThreshold <= 100:
+            raise ValueError("missingDisplayThreshold must be in [0, 100] or None.")
+        if sampleUnit not in ("window", "flow"):
+            raise ValueError("sampleUnit must be window or flow.")
+        self.sampleUnit = sampleUnit
+        self.nearConstantRatio = nearConstantRatio
+        self.correlationThreshold = correlationThreshold
+        self.randomSeed = randomSeed
+        self.missingDisplayThreshold = missingDisplayThreshold
+        self.noFlowLabel = noFlowLabel.upper()
+        self.downsample = downsample
+        self.removeZeroColumns = removeZeroColumns
+        self.removeAllMissingColumns = removeAllMissingColumns
+        self.removeConstantColumns = removeConstantColumns
+        self.imputation = imputation
+        self.normalization = normalization
 
     def loadAnalysisFrame(self, datasetPath):
-        # Reabre um dataset bruto e mantém somente janelas realmente rotuladas com algum ataque.
         frame = pd.read_csv(datasetPath, low_memory=False)
-        if "Label" not in frame.columns:
+        if "Label" not in frame:
             raise KeyError("Missing Label column.")
-        if "Attack" not in frame.columns:
-            frame["Attack"] = frame["Label"].astype(str)
-        frame["Label"] = frame["Label"].astype(str).str.upper()
-        frame["Attack"] = frame["Attack"].astype(str).str.upper()
-        excluded_labels = {"BENIGN", self.noFlowLabel}
-        attack_frame = frame.loc[~frame["Label"].isin(excluded_labels)].copy()
-        if attack_frame.empty:
-            raise ValueError("The dataset contains no attack-labeled windows.")
-        attack_frame["Attack"] = attack_frame["Label"]
-        return attack_frame.reset_index(drop=True)
+        frame["Label"] = frame["Label"].astype(str).str.strip().str.upper()
+        if "Attack" in frame:
+            target = frame["Attack"].astype(str).str.strip().str.upper()
+            foreign = ~frame["Label"].isin({"BENIGN", "NORMAL", "0", self.noFlowLabel}) & frame["Label"].ne(target)
+            if foreign.any():
+                raise ValueError("A sample contains a label different from its target Attack.")
+        frame = frame.loc[~frame["Label"].isin({"BENIGN", "NORMAL", "0", self.noFlowLabel})].copy()
+        if frame.empty:
+            raise ValueError("The dataset contains no attack-labeled samples.")
+        frame["Attack"] = frame["Label"]
+        return frame.reset_index(drop=True)
 
     def balanceAttackWindows(self, frame):
-        # Aplica random undersampling sem reposição para usar a mesma quantidade de janelas em todos os ataques.
         counts = frame["Attack"].value_counts().sort_index()
-        target_count = int(counts.min())
-        blocks = []
-        summary = {}
-        for attack in sorted(counts.index):
-            group = frame.loc[frame["Attack"] == attack].copy()
-            selected = group.sample(n=target_count, replace=False, random_state=self.randomSeed)
+        blocks, summary = [], {}
+        for attack in counts.index:
+            group = frame.loc[frame["Attack"] == attack]
+            selected = group.sample(n=int(counts.min()), random_state=self.randomSeed) if self.downsample == "random" else group
             blocks.append(selected)
-            summary[str(attack)] = {
-                "availableWindows": int(len(group)),
-                "selectedWindows": target_count,
-                "droppedWindows": int(len(group) - target_count),
-            }
-        balanced = pd.concat(blocks, ignore_index=True)
-        sort_columns = [column for column in ["Attack", "Timestamp"] if column in balanced.columns]
-        if sort_columns:
-            balanced = balanced.sort_values(sort_columns, kind="stable").reset_index(drop=True)
-        return balanced, summary
+            unit = "Flows" if self.sampleUnit == "flow" else "Windows"
+            summary[attack] = {f"available{unit}": len(group), f"selected{unit}": len(selected),
+                              f"dropped{unit}": len(group) - len(selected)}
+        # Índices de origem conservam a ordem do Stream e garantem as mesmas janelas Mixed/Attack-Only.
+        selected = pd.concat(blocks).sort_index(kind="stable").reset_index(drop=True)
+        return selected, summary
 
     def selectNumericFeatures(self, frame, selectedFeatures=None):
-        # Seleciona somente features numéricas comportamentais e exclui metadados e métricas derivadas do rótulo.
+        excluded = self.metadataColumns | self.diagnosticColumns | {c for c in frame if c.startswith("Unnamed") or c.lower() in {"index", "flow_id"}}
         if selectedFeatures is not None:
-            features = [str(feature) for feature in selectedFeatures]
-            missing = [feature for feature in features if feature not in frame.columns]
-            if missing:
-                raise KeyError(f"Missing selected features: {missing}")
+            features = list(dict.fromkeys(selectedFeatures))
+            if any(f not in frame or f in excluded for f in features):
+                raise ValueError("Selected features must exist and cannot contain metadata or label diagnostics.")
             return features
-        excluded = self.metadataColumns | self.diagnosticColumns
-        features = []
-        for column in frame.columns:
-            if column in excluded:
-                continue
-            numeric = pd.to_numeric(frame[column], errors="coerce")
-            if numeric.notna().any():
-                features.append(column)
-        return features
-
-    def buildMissingSummary(self, frame, features):
-        # Resume somente combinações ataque-feature cuja porcentagem de ausências ultrapassa o limiar configurado.
-        rows = []
-        all_missing = []
-        for attack, group in frame.groupby("Attack", sort=True):
-            for feature in features:
-                values = pd.to_numeric(group[feature], errors="coerce").replace([np.inf, -np.inf], np.nan)
-                missing = int(values.isna().sum())
-                percentage = float(100.0 * missing / len(values)) if len(values) else 100.0
-                if missing == len(values):
-                    all_missing.append(feature)
-                if percentage >= self.missingDisplayThreshold:
-                    rows.append({
-                        "Attack": attack,
-                        "Feature": feature,
-                        "MissingCount": missing,
-                        "TotalCount": int(len(values)),
-                        "MissingPercentage": percentage,
-                    })
-        return pd.DataFrame(rows), sorted(set(all_missing))
-
-    def imputeByAttack(self, frame, features):
-        # Substitui valores inválidos pela mediana da própria feature dentro de cada ataque.
-        data = frame.copy()
-        unusable = []
-        for feature in features:
-            data[feature] = pd.to_numeric(data[feature], errors="coerce").replace([np.inf, -np.inf], np.nan)
-            feature_unusable = False
-            for attack, indexes in data.groupby("Attack").groups.items():
-                values = data.loc[indexes, feature]
-                valid = values.dropna()
-                if valid.empty:
-                    feature_unusable = True
-                    continue
-                data.loc[indexes, feature] = values.fillna(float(valid.median()))
-            if feature_unusable:
-                unusable.append(feature)
-        return data, sorted(set(unusable))
+        return [c for c in frame if c not in excluded and
+                (pd.api.types.is_numeric_dtype(frame[c]) or pd.to_numeric(frame[c], errors="coerce").notna().any()
+                 or frame[c].isna().all())]
 
     def removeLowInformationFeatures(self, frame, features):
-        # Remove features constantes ou quase constantes no dataset balanceado completo.
-        kept = []
-        removed = {}
-        for feature in features:
-            values = pd.to_numeric(frame[feature], errors="coerce")
-            if values.nunique(dropna=True) <= 1:
-                removed[feature] = "constant"
-                continue
-            top_ratio = float(values.value_counts(normalize=True, dropna=False).iloc[0])
-            if top_ratio >= self.nearConstantRatio:
-                removed[feature] = f"near_constant:{top_ratio:.6f}"
-                continue
-            kept.append(feature)
+        kept, removed = [], {}
+        for f in features:
+            values = frame[f].dropna()
+            if self.removeConstantColumns is not None and values.nunique() == 1:
+                removed[f] = "constant"
+            elif self.nearConstantRatio is not None and not values.empty and values.value_counts(normalize=True).iloc[0] >= self.nearConstantRatio:
+                removed[f] = "near_constant"
+            else:
+                kept.append(f)
         return kept, removed
 
     def removeHighlyCorrelatedFeatures(self, frame, features):
-        # Remove apenas redundâncias extremas entre features usando correlação absoluta acima do limiar configurado.
-        if len(features) < 2:
+        if self.correlationThreshold is None:
             return list(features), {}
         correlation = frame[features].corr().abs()
-        kept = []
-        removed = {}
-        for feature in features:
-            conflict = None
-            for retained in kept:
-                value = correlation.loc[feature, retained]
-                if pd.notna(value) and float(value) >= self.correlationThreshold:
-                    conflict = retained
-                    break
-            if conflict is None:
-                kept.append(feature)
+        kept, removed = [], {}
+        for f in features:
+            conflicts = [k for k in kept if pd.notna(correlation.loc[f, k]) and correlation.loc[f, k] >= self.correlationThreshold]
+            if conflicts:
+                removed[f] = {"correlatedWith": conflicts[0], "absoluteCorrelation": float(correlation.loc[f, conflicts[0]])}
             else:
-                removed[feature] = {
-                    "correlatedWith": conflict,
-                    "absoluteCorrelation": float(correlation.loc[feature, conflict]),
-                }
+                kept.append(f)
         return kept, removed
 
     def standardize(self, frame, features):
-        # Aplica um único StandardScaler global em lote sobre o dataset balanceado completo.
-        scaler = StandardScaler()
-        values = scaler.fit_transform(frame[features].to_numpy(dtype=float))
-        standardized = frame[[column for column in ["Timestamp", "Attack", "Label"] if column in frame.columns]].copy()
-        standardized[features] = values
-        return standardized
-
-    def saveFeatureSelection(self, reportDirectory, candidates, unusable, lowRemoved, correlationRemoved, finalFeatures, balanceSummary, missingSummary):
-        # Salva em um único JSON a seleção de features, o balanceamento e os diagnósticos necessários à análise.
-        payload = {
-            "candidateFeatures": list(candidates),
-            "removedAllMissingInAtLeastOneAttack": list(unusable),
-            "removedLowInformation": dict(lowRemoved),
-            "removedHighCorrelation": dict(correlationRemoved),
-            "mahalanobisFeatures": list(finalFeatures),
-            "mahalanobisFeatureCount": len(finalFeatures),
-            "randomUndersampling": {
-                "randomSeed": self.randomSeed,
-                "perAttack": balanceSummary,
-            },
-            "missingDisplayThresholdPercentage": self.missingDisplayThreshold,
-            "featuresAboveMissingThreshold": missingSummary.to_dict(orient="records"),
-        }
-        path = Path(reportDirectory) / "feature_selection.json"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
-        return str(path)
+        output = frame[[c for c in frame if c in self.metadataColumns]].copy()
+        output[features] = (StandardScaler().fit_transform(frame[features]) if self.normalization == "standard"
+                            else frame[features].to_numpy())
+        return output
 
     def runFromFile(self, datasetPath, outputDirectory, selectedFeatures=None):
-        # Reabre o dataset bruto, balanceia, limpa, imputa e salva apenas os artefatos necessários para a análise posterior.
-        output_directory = Path(outputDirectory)
-        dataset_directory = output_directory / "datasets"
-        report_directory = output_directory / "reports"
-        dataset_directory.mkdir(parents=True, exist_ok=True)
-        report_directory.mkdir(parents=True, exist_ok=True)
-        attack_frame = self.loadAnalysisFrame(datasetPath)
-        balanced, balance_summary = self.balanceAttackWindows(attack_frame)
+        root = Path(outputDirectory)
+        (root / "datasets").mkdir(parents=True, exist_ok=True)
+        (root / "reports").mkdir(parents=True, exist_ok=True)
+        balanced, balance = self.balanceAttackWindows(self.loadAnalysisFrame(datasetPath))
         candidates = self.selectNumericFeatures(balanced, selectedFeatures)
-        missing_summary, missing_everywhere = self.buildMissingSummary(balanced, candidates)
-        imputed, unusable = self.imputeByAttack(balanced, candidates)
-        unusable = sorted(set(unusable) | set(missing_everywhere))
-        eligible = [feature for feature in candidates if feature not in unusable]
-        low_kept, low_removed = self.removeLowInformationFeatures(imputed, eligible)
-        final_features, correlation_removed = self.removeHighlyCorrelatedFeatures(imputed, low_kept)
-        if not final_features:
-            raise ValueError("No feature remained available for similarity analysis.")
-        standardized = self.standardize(imputed, final_features)
-        balanced_path = dataset_directory / "balanced_attack_windows.csv"
-        imputed_path = dataset_directory / "imputed_attack_windows.csv"
-        standardized_path = dataset_directory / "standardized_attack_windows.csv"
-        balanced.to_csv(balanced_path, index=False)
-        imputed.to_csv(imputed_path, index=False)
-        standardized.to_csv(standardized_path, index=False)
-        feature_selection_path = self.saveFeatureSelection(
-            report_directory,
-            candidates,
-            unusable,
-            low_removed,
-            correlation_removed,
-            final_features,
-            balance_summary,
-            missing_summary,
-        )
-        return {
-            "balancedDatasetPath": str(balanced_path),
-            "imputedDatasetPath": str(imputed_path),
-            "standardizedDatasetPath": str(standardized_path),
-            "featureSelectionPath": str(feature_selection_path),
-            "features": final_features,
-            "missingSummary": missing_summary,
-            "balanceSummary": balance_summary,
-        }
+        data = balanced.copy()
+        for f in candidates:
+            data[f] = pd.to_numeric(data[f], errors="coerce").replace([np.inf, -np.inf], np.nan)
+        missing_rows = []
+        if self.missingDisplayThreshold is not None:
+            for attack, group in data.groupby("Attack", sort=True):
+                for f in candidates:
+                    percentage = float(group[f].isna().mean() * 100)
+                    if percentage >= self.missingDisplayThreshold:
+                        missing_rows.append({"Attack": attack, "Feature": f, "MissingCount": int(group[f].isna().sum()),
+                                             "TotalCount": len(group), "MissingPercentage": percentage})
+        missing = pd.DataFrame(missing_rows, columns=["Attack", "Feature", "MissingCount", "TotalCount", "MissingPercentage"])
+        all_missing = [f for f in candidates if data[f].notna().sum() == 0] if self.removeAllMissingColumns is not None else []
+        zeros = [f for f in candidates if data[f].notna().any() and data[f].dropna().eq(0).all()] if self.removeZeroColumns is not None else []
+        eligible = [f for f in candidates if f not in set(all_missing + zeros)]
+        eligible, low_removed = self.removeLowInformationFeatures(data, eligible)
+        if not eligible:
+            raise ValueError("No feature remained after pre-imputation cleaning.")
+        medians = data[eligible].median() if self.imputation == "median" else pd.Series(dtype=float)
+        if self.imputation == "median":
+            data[eligible] = data[eligible].fillna(medians)
+        # Armazena somente features elegíveis e metadados; colunas removidas não reaparecem na seleção RF.
+        imputed = data[[c for c in data if c in self.metadataColumns] + eligible].copy()
+        final, correlation_removed = self.removeHighlyCorrelatedFeatures(imputed, eligible)
+        if not final:
+            raise ValueError("No feature remained after selection.")
+        standardized = self.standardize(imputed, final)
+        suffix = "flows" if self.sampleUnit == "flow" else "windows"
+        paths = {"balancedDatasetPath": root / f"datasets/balanced_attack_{suffix}.csv",
+                 "imputedDatasetPath": root / f"datasets/imputed_attack_{suffix}.csv",
+                 "standardizedDatasetPath": root / f"datasets/standardized_attack_{suffix}.csv",
+                 "featureSelectionPath": root / "reports/feature_selection.json"}
+        balanced.to_csv(paths["balancedDatasetPath"], index=False)
+        imputed.to_csv(paths["imputedDatasetPath"], index=False)
+        standardized.to_csv(paths["standardizedDatasetPath"], index=False)
+        payload = {"sourceDataset": str(Path(datasetPath).resolve()), "sampleUnit": self.sampleUnit, "windowSeconds": 1 if self.sampleUnit == "window" else None,
+                   "candidateFeatures": candidates, "preparedFeatures": eligible, "removedZeroColumns": zeros,
+                   "removedAllMissingGlobally": all_missing, "removedLowInformation": low_removed,
+                   "removedHighCorrelation": correlation_removed, "mahalanobisFeatures": final,
+                   "mahalanobisFeatureCount": len(final), "globalMedians": {k: None if pd.isna(v) else float(v) for k, v in medians.items()},
+                   "randomUndersampling": {"enabled": self.downsample is not None, "method": self.downsample,
+                                             "randomSeed": self.randomSeed, "perAttack": balance},
+                   "settings": {k: getattr(self, k) for k in ("nearConstantRatio", "correlationThreshold", "removeZeroColumns",
+                       "removeAllMissingColumns", "removeConstantColumns", "imputation", "normalization", "missingDisplayThreshold")},
+                   "featuresAboveMissingThreshold": missing.to_dict(orient="records")}
+        paths["featureSelectionPath"].write_text(json.dumps(payload, indent=2, ensure_ascii=False, allow_nan=False), encoding="utf-8")
+        return {**{k: str(v) for k, v in paths.items()}, "features": final, "preparedFeatures": eligible,
+                "missingSummary": missing, "balanceSummary": balance}

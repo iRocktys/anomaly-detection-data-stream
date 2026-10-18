@@ -54,7 +54,7 @@ class SimilarityDataLoader:
             raise KeyError(f"Missing timestamp column: {timestamp_column}.")
         if duration_column not in data.columns:
             raise KeyError(f"Missing duration column: {duration_column}.")
-        data["FlowStart"] = pd.to_datetime(data[timestamp_column], errors="coerce", dayfirst=True)
+        data["FlowStart"] = pd.to_datetime(data[timestamp_column], errors="coerce", dayfirst=True, format="mixed")
         duration = pd.to_numeric(data[duration_column], errors="coerce").fillna(0.0).clip(lower=0.0)
         data["FlowEnd"] = data["FlowStart"] + pd.to_timedelta(duration.to_numpy(dtype=float), unit="us")
         return data.dropna(subset=["FlowStart", "FlowEnd"]).copy()
@@ -63,11 +63,14 @@ class SimilarityDataLoader:
         # Localiza o primeiro término de fluxo do ataque solicitado dentro do arquivo original.
         target = self.normalizeLabel(attackLabel)
         label_column = self.cleanColumnName(self.labelColumn)
+        starts = []
         for chunk in pd.read_csv(csvPath, chunksize=self.chunkSize, low_memory=False):
             prepared = self.prepareChunk(chunk)
             matches = prepared.loc[prepared[label_column] == target, "FlowEnd"]
             if not matches.empty:
-                return matches.min()
+                starts.append(matches.min())
+        if starts:
+            return min(starts)
         raise ValueError(f"Attack '{target}' was not found in {csvPath}.")
 
     def loadTemporalCut(self, csvPath, attackLabel, durationMinutes=5.0):
@@ -82,8 +85,6 @@ class SimilarityDataLoader:
             selected = prepared.loc[(prepared["FlowEnd"] >= start) & (prepared["FlowEnd"] < end)].copy()
             if not selected.empty:
                 parts.append(selected)
-            if not prepared.empty and prepared["FlowEnd"].min() >= end:
-                break
         if not parts:
             raise ValueError(f"No flows were found in the selected interval for attack '{target}'.")
         cut = pd.concat(parts, ignore_index=True).sort_values("FlowEnd", kind="stable").reset_index(drop=True)
