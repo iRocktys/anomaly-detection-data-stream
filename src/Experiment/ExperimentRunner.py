@@ -15,16 +15,16 @@ from src.Training.StrategyRegistry import TrainingStrategyRegistry
 
 
 class ExperimentRunner:
+    # Inicializa o executor preservando detecção como tarefa padrão e permitindo classificação binária explícita.
     def __init__(self, outputRoot=None, task="anomaly"):
-        # Inicializa o executor preservando detecção como tarefa padrão e permitindo classificação binária explícita.
         resolved_task = str(task).strip().lower()
         if resolved_task not in {"anomaly", "classification"}:
             raise ValueError("Task must be 'anomaly' or 'classification'.")
         self.task = resolved_task
         self.outputRoot = Path(outputRoot or defaults.DEFAULT_OUTPUT_ROOT)
 
+    # Executa a mesma configuração experimental em todos os datasets explicitamente informados.
     def run(self, experimentName, datasets, parameters=None):
-        # Executa a mesma configuração experimental em todos os datasets explicitamente informados.
         experiment_name = str(experimentName).strip()
         if not experiment_name:
             raise ValueError("experimentName must be provided explicitly.")
@@ -50,8 +50,8 @@ class ExperimentRunner:
             "summary": pd.DataFrame(records),
         }
 
+    # Prepara uma stream binária e delega a execução ao pipeline correspondente à tarefa selecionada.
     def _runDataset(self, dataset, parameters, outputDirectory):
-        # Prepara uma stream binária e delega a execução ao pipeline correspondente à tarefa selecionada.
         if not dataset.path.exists():
             raise FileNotFoundError(f"Dataset not found: {dataset.path}")
         dataframe = pd.read_csv(dataset.path, low_memory=False)
@@ -118,6 +118,7 @@ class ExperimentRunner:
                 strictTrainingErrors=bool(execution.get("strictTrainingErrors", False)),
             )
         result = pipeline.run()
+        result["featureRemovalReport"] = processor.getFeatureRemovalReport()
         result["featureNames"] = tuple(feature_names)
         result["targetNames"] = tuple(target_names)
         return result

@@ -1,69 +1,53 @@
-import json
-from collections import Counter
 from numbers import Integral
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 
+from src.Data.FeatureAudit import buildFeatureRemovalReport
+
 
 class SimilarityOneVsAll:
-    """Saída: features por ataque e seleção comum, sem avaliação de classificação."""
+    # Define o Top-K por classe e a execução serial padrão do Random Forest.
+    def __init__(self, featuresPerAttack=15, nEstimators=300, randomSeed=42, nJobs=1):
+        if isinstance(nEstimators, bool) or not isinstance(nEstimators, Integral) or nEstimators < 1:
+            raise ValueError("nEstimators deve ser um inteiro positivo.")
+        if isinstance(nJobs, bool) or not isinstance(nJobs, Integral) or nJobs == 0:
+            raise ValueError("nJobs deve ser um inteiro diferente de zero.")
+        self.featuresPerAttack, self.nEstimators = featuresPerAttack, nEstimators
+        self.randomSeed, self.nJobs = randomSeed, nJobs
 
-    def __init__(self, featuresPerAttack=10, extractionMode="union", minAttackOccurrences=2,
-                 nEstimators=300, randomSeed=42, nJobs=-1):
-        if extractionMode not in (None, "union", "recurrence"):
-            raise ValueError("extractionMode must be 'union', 'recurrence' or None.")
-        if not isinstance(minAttackOccurrences, Integral) or minAttackOccurrences < 1:
-            raise ValueError("minAttackOccurrences must be a positive integer.")
-        self.featuresPerAttack = featuresPerAttack
-        self.extractionMode = extractionMode
-        self.minAttackOccurrences = int(minAttackOccurrences)
-        self.nEstimators = nEstimators
-        self.randomSeed = randomSeed
-        self.nJobs = nJobs
-
-    def runFromFile(self, datasetPath, featureSelectionPath, outputDirectory):
-        frame = pd.read_csv(datasetPath, low_memory=False)
-        payload = json.loads(Path(featureSelectionPath).read_text(encoding="utf-8"))
-        features = payload["preparedFeatures"]
-        attacks = sorted(frame["Attack"].unique())
-        if len(attacks) < 2:
-            raise ValueError("One-Vs-All requires at least two attacks.")
-        if not np.isfinite(frame[features].to_numpy(dtype=float)).all():
-            raise ValueError("One-Vs-All input has missing/infinite values. Enable imputation or clean the input.")
-        per_attack = {}
-        if self.extractionMode is None:
-            final = list(features)
-        else:
-            if isinstance(self.featuresPerAttack, dict) and set(self.featuresPerAttack) != set(attacks):
-                raise ValueError("featuresPerAttack must define a quantity for every attack.")
-            for attack in attacks:
-                k = self.featuresPerAttack[attack] if isinstance(self.featuresPerAttack, dict) else self.featuresPerAttack
-                if not isinstance(k, Integral) or isinstance(k, bool) or k < 1:
-                    raise ValueError("featuresPerAttack must be a positive integer or a dictionary of integers.")
-                model = RandomForestClassifier(n_estimators=self.nEstimators, random_state=self.randomSeed,
-                                               n_jobs=self.nJobs, class_weight="balanced")
-                model.fit(frame[features], frame["Attack"].eq(attack).astype(int))
-                # Desempate determinístico pela ordem de entrada. Importância zero não é selecionada.
-                indices = np.argsort(-model.feature_importances_, kind="stable")
-                per_attack[attack] = [features[i] for i in indices if model.feature_importances_[i] > 0][:k]
-            frequency = Counter(f for selected in per_attack.values() for f in selected)
-            minimum = 1 if self.extractionMode == "union" else self.minAttackOccurrences
-            final = [f for f in features if frequency[f] >= minimum]
-            if not final:
-                raise ValueError("No feature meets the configured recurrence/importance criterion; change K or minimum recurrence.")
-        frequency = Counter(f for selected in per_attack.values() for f in selected)
-        result = {"extractionMode": self.extractionMode, "featuresPerAttack": self.featuresPerAttack,
-                  "minAttackOccurrences": self.minAttackOccurrences, "selectedFeaturesByAttack": per_attack,
-                  "featureOccurrences": dict(frequency), "selectedFeatures": final, "featureCount": len(final),
-                  "randomForest": {"nEstimators": self.nEstimators, "randomSeed": self.randomSeed,
-                                   "classWeight": "balanced", "zeroImportanceExcluded": True},
-                  "requestedVsSelected": {a: {"requested": self.featuresPerAttack[a] if isinstance(self.featuresPerAttack, dict)
-                                                  else self.featuresPerAttack, "selected": len(fs)} for a, fs in per_attack.items()}}
-        root = Path(outputDirectory)
-        root.mkdir(parents=True, exist_ok=True)
-        path = root / "one_vs_all_selected_features.json"
-        path.write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8")
-        return {**result, "selectionPath": str(path)}
+    # Seleciona a união dos Top-K usando todas as classes e mantém os resultados em memória.
+    def run(self, prepared):
+        frame, features = prepared["frame"], list(prepared["features"])
+        classes = sorted(frame.Label.unique())
+        if "BENIGN" not in classes or len(classes) < 2:
+            raise ValueError("O RF precisa receber BENIGN e pelo menos uma classe de ataque.")
+        values = frame[features].to_numpy(dtype=float)
+        if not np.isfinite(values).all():
+            raise ValueError("O RF recebeu características não finitas.")
+        if isinstance(self.featuresPerAttack, dict) and set(self.featuresPerAttack) != set(classes):
+            raise ValueError("Informe o Top-K de todas as classes, incluindo BENIGN.")
+        perClass = {}
+        for label in classes:
+            k = self.featuresPerAttack[label] if isinstance(self.featuresPerAttack, dict) else self.featuresPerAttack
+            if isinstance(k, bool) or not isinstance(k, Integral) or k < 1:
+                raise ValueError("O Top-K deve ser um inteiro positivo.")
+            target = frame.Label.eq(label).to_numpy(dtype=np.int8)
+            model = RandomForestClassifier(n_estimators=self.nEstimators, random_state=self.randomSeed,
+                                           n_jobs=self.nJobs, class_weight="balanced")
+            model.fit(values, target)
+            importances = np.asarray(model.feature_importances_, dtype=float)
+            order = np.argsort(-importances, kind="stable")
+            perClass[label] = [features[i] for i in order if importances[i] > 0][:int(k)]
+        if any(not selected for selected in perClass.values()):
+            raise ValueError("Uma classe não apresentou características com importância positiva.")
+        union = set().union(*(set(selected) for selected in perClass.values()))
+        selected = [feature for feature in features if feature in union]
+        removed = buildFeatureRemovalReport([{"Stage": "One-vs-All", "Feature": f,
+                    "Reason": "Não selecionada no Top-K de nenhuma classe"} for f in features if f not in union])
+        table = pd.DataFrame([{"Class": label, "SelectedCount": len(fs), "Features": ", ".join(fs)}
+                              for label, fs in perClass.items()])
+        return {"frame": frame[["Timestamp"] + selected + ["Label"]].copy(), "selectedFeatures": selected,
+                "selectedFeaturesByClass": perClass, "featureTable": table, "normalization": prepared["normalization"],
+                "removedFeatures": removed}

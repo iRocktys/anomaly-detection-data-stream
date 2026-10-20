@@ -1,120 +1,95 @@
-import json
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 from sklearn.covariance import LedoitWolf
+from sklearn.preprocessing import StandardScaler
+
+from src.Data.FeatureAudit import buildFeatureRemovalReport
 
 
 class SimilarityAnalyzer:
-    def loadAnalysisData(self, standardizedDatasetPath, featureSelectionPath):
-        # Reabre a base padronizada e a lista de features usada no espaço comum da análise.
-        frame = pd.read_csv(standardizedDatasetPath, low_memory=False)
-        payload = json.loads(Path(featureSelectionPath).read_text(encoding="utf-8"))
-        features = list(payload["mahalanobisFeatures"])
-        missing = [feature for feature in features if feature not in frame.columns]
-        if missing:
-            raise KeyError(f"Missing Mahalanobis features: {missing}")
-        if not features or not np.isfinite(frame[features].to_numpy(dtype=float)).all():
-            raise ValueError("Mahalanobis requires finite features. Check imputation and feature selection settings.")
-        if frame["Attack"].nunique() < 2:
-            raise ValueError("Similarity requires at least two attacks.")
-        return frame, features
+    # Balanceia as classes somente para os cálculos estatísticos preservando o dataset usado pelo RF.
+    def selectStatisticsSamples(self, frame, downsample="random", randomSeed=42):
+        if downsample not in (None, "random"):
+            raise ValueError("downsample deve ser 'random' ou None.")
+        counts = frame.groupby("Label", sort=True).size()
+        if counts.min() < 2:
+            raise ValueError("Cada classe precisa ter pelo menos duas janelas para a covariância.")
+        minimum, blocks, rows = int(counts.min()), [], []
+        for label, group in frame.groupby("Label", sort=True):
+            chosen = group.sample(n=minimum, random_state=randomSeed) if downsample == "random" else group
+            blocks.append(chosen)
+            rows.append({"Class": label, "RFWindows": len(group), "StatisticsWindows": len(chosen),
+                         "DroppedForStatistics": len(group) - len(chosen)})
+        selected = pd.concat(blocks).sort_index(kind="stable").reset_index(drop=True)
+        return selected, pd.DataFrame(rows)
 
-    def calculateCentroids(self, standardizedFrame, features):
-        # Calcula o centroide multivariado padronizado de cada ataque.
-        return standardizedFrame.groupby("Attack", sort=True)[features].mean()
+    # Calcula o centroide padronizado de cada classe incluindo o tráfego benigno.
+    def calculateCentroids(self, frame, features):
+        centers = frame.groupby("Label", sort=True)[features].mean()
+        centers.index.name = "Class"
+        return centers
 
-    def buildWithinAttackResiduals(self, standardizedFrame, centroids, features):
-        # Centraliza cada janela em torno do centroide do próprio ataque para representar variabilidade interna.
-        blocks = []
-        for attack, group in standardizedFrame.groupby("Attack", sort=True):
-            values = group[features].to_numpy(dtype=float)
-            center = centroids.loc[attack, features].to_numpy(dtype=float)
-            blocks.append(values - center)
-        return np.vstack(blocks)
+    # Centraliza cada janela na média da própria classe para estimar a variabilidade interna comum.
+    def buildWithinClassResiduals(self, frame, centroids, features):
+        return np.vstack([group[features].to_numpy(dtype=float) - centroids.loc[label, features].to_numpy(dtype=float)
+                          for label, group in frame.groupby("Label", sort=True)])
 
+    # Estima a covariância interna regularizada de benignos e ataques pelo método Ledoit-Wolf.
     def estimateCommonCovariance(self, residuals, features):
-        # Estima uma única covariância within-attack regularizada por Ledoit-Wolf para todos os ataques.
+        if not np.isfinite(residuals).all() or not np.any(residuals):
+            raise ValueError("Não existe variabilidade interna suficiente para estimar a covariância.")
         estimator = LedoitWolf().fit(residuals)
-        covariance = pd.DataFrame(estimator.covariance_, index=features, columns=features)
-        inverse = np.linalg.pinv(estimator.covariance_)
-        return covariance, inverse, float(estimator.shrinkage_)
+        eigenvalues = np.linalg.eigvalsh(estimator.covariance_)
+        if eigenvalues[-1] <= 0 or eigenvalues[0] <= eigenvalues[-1] * 1e-12:
+            raise ValueError("Covariância degenerada; revise as características e as amostras selecionadas.")
+        return pd.DataFrame(estimator.covariance_, index=features, columns=features), np.linalg.pinv(estimator.covariance_), float(estimator.shrinkage_)
 
+    # Calcula a matriz de distâncias entre todas as classes utilizando uma covariância comum.
     def calculateDistances(self, centroids, inverseCovariance):
-        # Calcula a distância de Mahalanobis entre todos os pares de centroides usando a mesma covariância.
-        attacks = list(centroids.index)
-        matrix = pd.DataFrame(np.zeros((len(attacks), len(attacks))), index=attacks, columns=attacks, dtype=float)
-        rows = []
-        for first_index, first_attack in enumerate(attacks):
-            first = centroids.loc[first_attack].to_numpy(dtype=float)
-            for second_index in range(first_index + 1, len(attacks)):
-                second_attack = attacks[second_index]
-                second = centroids.loc[second_attack].to_numpy(dtype=float)
-                difference = first - second
-                squared = float(difference @ inverseCovariance @ difference.T)
-                distance = float(np.sqrt(max(squared, 0.0)))
-                matrix.loc[first_attack, second_attack] = distance
-                matrix.loc[second_attack, first_attack] = distance
-                rows.append({"AttackA": first_attack, "AttackB": second_attack, "MahalanobisDistance": distance})
-        pairwise = pd.DataFrame(rows).sort_values("MahalanobisDistance", ascending=True).reset_index(drop=True)
-        return pairwise, matrix
+        classes = list(centroids.index)
+        matrix = pd.DataFrame(np.zeros((len(classes), len(classes))), index=classes, columns=classes)
+        for firstIndex, firstClass in enumerate(classes):
+            for secondClass in classes[firstIndex + 1:]:
+                difference = centroids.loc[firstClass].to_numpy() - centroids.loc[secondClass].to_numpy()
+                distance = float(np.sqrt(max(float(difference @ inverseCovariance @ difference), 0)))
+                matrix.loc[firstClass, secondClass] = matrix.loc[secondClass, firstClass] = distance
+        return matrix
 
-    def updateFeatureSelection(self, featureSelectionPath, shrinkage, attackCount, featureCount):
-        # Acrescenta ao JSON de seleção os parâmetros finais da covariância usada pela Mahalanobis.
-        path = Path(featureSelectionPath)
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        payload["mahalanobisAnalysis"] = {
-            "covarianceEstimator": "LedoitWolf",
-            "ledoitWolfShrinkage": float(shrinkage),
-            "attackCount": int(attackCount),
-            "featureCount": int(featureCount),
-        }
-        path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
-
-    def runFromFile(self, standardizedDatasetPath, featureSelectionPath, reportDirectory):
-        # Reabre os artefatos processados, calcula centroides, Ledoit-Wolf e a matriz de distância sem gerar metadata separado.
-        frame, features = self.loadAnalysisData(standardizedDatasetPath, featureSelectionPath)
-        report_directory = Path(reportDirectory)
-        report_directory.mkdir(parents=True, exist_ok=True)
-        centroids = self.calculateCentroids(frame, features)
-        residuals = self.buildWithinAttackResiduals(frame, centroids, features)
+    # Executa os cálculos em memória e salva somente features selecionadas, centroides e matrizes.
+    def run(self, selection, outputDirectory="output/Similarity", downsample="random", randomSeed=42):
+        frame, selectedFeatures = selection["frame"], list(selection["selectedFeatures"])
+        if "BENIGN" not in set(frame.Label) or frame.Label.nunique() < 2:
+            raise ValueError("A similaridade precisa incluir BENIGN e pelo menos um ataque.")
+        if not selectedFeatures or not np.isfinite(frame[selectedFeatures].to_numpy(dtype=float)).all():
+            raise ValueError("A análise precisa receber características selecionadas e finitas.")
+        balanced, summary = self.selectStatisticsSamples(frame, downsample, randomSeed)
+        constants = [f for f in selectedFeatures if balanced[f].nunique(dropna=False) <= 1]
+        features = [f for f in selectedFeatures if f not in constants]
+        removed = buildFeatureRemovalReport([{"Stage": "Covariance", "Feature": f,
+                    "Reason": "Constante no subconjunto selecionado para os cálculos estatísticos"} for f in constants])
+        if not features:
+            raise ValueError(f"Todas as características ficaram constantes no subconjunto estatístico: {constants}")
+        scaler = StandardScaler().fit(balanced[features]) if selection["normalization"] == "standard" else None
+        standardized = balanced[["Timestamp"]].copy()
+        standardized[features] = scaler.transform(balanced[features]) if scaler is not None else balanced[features].to_numpy()
+        standardized["Label"] = balanced.Label
+        centers = self.calculateCentroids(standardized, features)
+        residuals = self.buildWithinClassResiduals(standardized, centers, features)
         covariance, inverse, shrinkage = self.estimateCommonCovariance(residuals, features)
-        pairwise, distance_matrix = self.calculateDistances(centroids, inverse)
-        centroid_path = report_directory / "attack_centroids_standardized.csv"
-        covariance_path = report_directory / "common_within_attack_covariance.csv"
-        distance_path = report_directory / "mahalanobis_distance_matrix.csv"
-        pairwise_path = report_directory / "pairwise_mahalanobis_distances.csv"
-        centroids.to_csv(centroid_path)
-        covariance.to_csv(covariance_path)
-        distance_matrix.to_csv(distance_path)
-        pairwise.to_csv(pairwise_path, index=False)
-        self.updateFeatureSelection(featureSelectionPath, shrinkage, len(centroids), len(features))
-        return {
-            "distanceMatrixPath": str(distance_path),
-            "pairwisePath": str(pairwise_path),
-            "centroidPath": str(centroid_path),
-            "covariancePath": str(covariance_path),
-            "featureSelectionPath": str(featureSelectionPath),
-            "shrinkage": shrinkage,
-        }
-
-    def classifyDistanceFile(self, pairwisePath, outputPath, similarQuantile=0.33, distinctQuantile=0.67):
-        # Reabre o ranking de distâncias e classifica os pares em próximos, intermediários e distintos por quantis.
-        pairwise = pd.read_csv(pairwisePath)
-        if pairwise.empty:
-            pairwise["DistanceLevel"] = []
-            similar_limit = np.nan
-            distinct_limit = np.nan
-        else:
-            similar_limit = float(pairwise["MahalanobisDistance"].quantile(float(similarQuantile)))
-            distinct_limit = float(pairwise["MahalanobisDistance"].quantile(float(distinctQuantile)))
-            pairwise["DistanceLevel"] = np.where(
-                pairwise["MahalanobisDistance"] <= similar_limit,
-                "similar",
-                np.where(pairwise["MahalanobisDistance"] >= distinct_limit, "distinct", "intermediate"),
-            )
-        output_path = Path(outputPath)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        pairwise.to_csv(output_path, index=False)
-        return str(output_path), similar_limit, distinct_limit
+        distances = self.calculateDistances(centers, inverse)
+        selectedTable = pd.DataFrame([{
+            "Feature": feature,
+            "SelectedByClasses": ", ".join(label for label, values in selection["selectedFeaturesByClass"].items() if feature in values),
+            "UsedForCovariance": feature in features,
+        } for feature in selectedFeatures])
+        output = Path(outputDirectory)
+        output.mkdir(parents=True, exist_ok=True)
+        selectedTable.to_csv(output / "selected_features.csv", index=False)
+        centers.to_csv(output / "class_centroids_standardized.csv")
+        covariance.to_csv(output / "common_within_class_covariance.csv")
+        distances.to_csv(output / "mahalanobis_distance_matrix.csv")
+        return {"centroids": centers, "covariance": covariance, "distanceMatrix": distances,
+                "features": features, "removedFeatures": removed, "classSummary": summary,
+                "selectedFeatures": selectedTable, "shrinkage": shrinkage}

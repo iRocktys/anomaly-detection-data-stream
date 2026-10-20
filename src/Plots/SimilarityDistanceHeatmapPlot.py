@@ -5,17 +5,17 @@ import numpy as np
 
 
 class SimilarityDistanceHeatmapPlot:
+    # Gera o mapa de calor das distâncias entre BENIGN e as classes de ataque.
     def plot(self, distanceMatrix, outputPath, dpi=160):
-        # Gera o mapa de calor da distância de Mahalanobis entre todos os ataques.
         output_path = Path(outputPath)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         values = distanceMatrix.to_numpy(dtype=float)
         size = max(7.0, len(distanceMatrix) * 0.78)
         figure, axis = plt.subplots(figsize=(size, size * 0.85))
         image = axis.imshow(values, aspect="auto")
-        axis.set_title("Attack Mahalanobis Distance Matrix")
-        axis.set_xlabel("Attack")
-        axis.set_ylabel("Attack")
+        axis.set_title("Class Mahalanobis Distance Matrix")
+        axis.set_xlabel("Class")
+        axis.set_ylabel("Class")
         axis.set_xticks(np.arange(len(distanceMatrix.columns)), labels=distanceMatrix.columns, rotation=45, ha="right")
         axis.set_yticks(np.arange(len(distanceMatrix.index)), labels=distanceMatrix.index)
         for row in range(values.shape[0]):

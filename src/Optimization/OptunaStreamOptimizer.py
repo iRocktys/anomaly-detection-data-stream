@@ -25,8 +25,8 @@ from src.Training.StrategyRegistry import TrainingStrategyRegistry
 
 
 class OptunaStreamOptimizer:
+    # Inicializa o otimizador preservando os argumentos originais e acrescentando suporte opcional a classificadores.
     def __init__(self, config, searchSpace=None, modelSearchSpace=None, classifierSearchSpace=None):
-        # Inicializa o otimizador preservando os argumentos originais e acrescentando suporte opcional a classificadores.
         if not isinstance(config, OptimizationConfig):
             raise TypeError("config must be an OptimizationConfig.")
         self.config = config
@@ -35,8 +35,8 @@ class OptunaStreamOptimizer:
         self.modelSearchSpace = modelSearchSpace or AifSearchSpace(config.aifSearchSpace)
         self.classifierSearchSpace = classifierSearchSpace or ClassifierSearchSpace()
 
+    # Otimiza cada dataset, salva os trials e reexecuta somente a melhor configuração com artefatos completos.
     def run(self):
-        # Otimiza cada dataset, salva os trials e reexecuta somente a melhor configuração com artefatos completos.
         optuna = self._loadOptuna()
         prepared_datasets = [self._prepareDataset(dataset) for dataset in self.config.datasetConfigs]
         best_results = {}
@@ -109,8 +109,8 @@ class OptunaStreamOptimizer:
             "summaryPath": str(summary_path),
         }
 
+    # Continua sugerindo configurações até completar a quantidade solicitada de trials válidos.
     def _optimizeStudy(self, study, dataset):
-        # Continua sugerindo configurações até completar a quantidade solicitada de trials válidos.
         target_complete = int(self.config.nTrials)
         maximum_attempts = target_complete * int(self.config.maxTrialAttemptsMultiplier)
         attempts = 0
@@ -124,8 +124,8 @@ class OptunaStreamOptimizer:
         if complete_trials < target_complete:
             print("Aviso: o limite de tentativas foi atingido e o melhor resultado disponível será utilizado.")
 
+    # Conta somente trials concluídos com F1 finito.
     def _countComplete(self, study):
-        # Conta somente trials concluídos com F1 finito.
         return sum(
             1
             for trial in study.trials
@@ -134,8 +134,8 @@ class OptunaStreamOptimizer:
             and math.isfinite(float(trial.value))
         )
 
+    # Executa um trial somente em memória e retorna o F1 binário como função objetivo.
     def _objective(self, trial, dataset):
-        # Executa um trial somente em memória e retorna o F1 binário como função objetivo.
         optuna = self._loadOptuna()
         try:
             parameters = self._suggestParameters(trial, dataset.parameters)
@@ -153,8 +153,8 @@ class OptunaStreamOptimizer:
         except (DspotCalibrationError, ValueError) as error:
             raise optuna.TrialPruned(str(error)) from error
 
+    # Sugere apenas os parâmetros pertencentes à tarefa e mantém intacta a configuração restante.
     def _suggestParameters(self, trial, baseParameters):
-        # Sugere apenas os parâmetros pertencentes à tarefa e mantém intacta a configuração restante.
         parameters = deepMerge(baseParameters, {})
         model_code = self._getModelCode(parameters)
         base_model = dict(parameters["model"].get("parameters", {}))
@@ -201,8 +201,8 @@ class OptunaStreamOptimizer:
             parameters["model"]["parameters"] = deepMerge(base_model, fixed_model)
         return parameters
 
+    # Carrega o dataset uma única vez e mantém a stream reiniciável entre os trials.
     def _prepareDataset(self, dataset):
-        # Carrega o dataset uma única vez e mantém a stream reiniciável entre os trials.
         if not dataset.path.exists():
             raise FileNotFoundError(f"Dataset not found: {dataset.path}")
         dataframe = pd.read_csv(dataset.path, low_memory=False)
@@ -216,6 +216,7 @@ class OptunaStreamOptimizer:
             target_label_col=dataset.targetColumn,
             binary_label=dataset.binaryLabel,
         )
+        processor.reportFeatureRemovals(f"Features removidas na otimização de {dataset.name}")
         attack_instances = sum(
             1
             for label in label_names
@@ -236,8 +237,8 @@ class OptunaStreamOptimizer:
             parameters=effective_parameters,
         )
 
+    # Cria componentes novos para cada execução usando o mesmo pipeline empregado no treinamento normal.
     def _createPipeline(self, dataset, parameters, resultManager, generatePlots):
-        # Cria componentes novos para cada execução usando o mesmo pipeline empregado no treinamento normal.
         preprocessing = parameters["preprocessing"]
         execution = parameters["execution"]
         model = parameters["model"]
@@ -284,21 +285,21 @@ class OptunaStreamOptimizer:
             strictTrainingErrors=bool(execution.get("strictTrainingErrors", False)),
         )
 
+    # Normaliza o código do modelo usando o registry adequado à tarefa corrente.
     def _getModelCode(self, parameters):
-        # Normaliza o código do modelo usando o registry adequado à tarefa corrente.
         code = parameters["model"]["code"]
         if self.config.task == "classification":
             return ClassifierRegistry.normalizeCode(code)
         return ModelRegistry.normalizeCode(code)
 
+    # Sanitiza nomes lógicos antes de utilizá-los em diretórios de resultados.
     def _normalizeName(self, value):
-        # Sanitiza nomes lógicos antes de utilizá-los em diretórios de resultados.
         ascii_name = unicodedata.normalize("NFKD", str(value).strip()).encode("ascii", "ignore").decode("ascii")
         safe_name = re.sub(r"[^A-Za-z0-9]+", "_", ascii_name).strip("_")
         return safe_name or "dataset"
 
+    # Converte caminhos, tuplas e estruturas aninhadas para tipos serializáveis em JSON.
     def _jsonSafe(self, value):
-        # Converte caminhos, tuplas e estruturas aninhadas para tipos serializáveis em JSON.
         if isinstance(value, Path):
             return str(value)
         if isinstance(value, tuple):
@@ -310,8 +311,8 @@ class OptunaStreamOptimizer:
         return value
 
     @staticmethod
+    # Importa Optuna somente quando a rotina de otimização é executada.
     def _loadOptuna():
-        # Importa Optuna somente quando a rotina de otimização é executada.
         try:
             import optuna
         except ImportError as error:

@@ -6,8 +6,8 @@ from scipy.spatial.distance import squareform
 
 
 class SimilarityDendrogramPlot:
+    # Gera o dendrograma de BENIGN e dos ataques usando a matriz de distâncias.
     def plot(self, distanceMatrix, outputPath, dpi=160):
-        # Gera o dendrograma dos ataques diretamente a partir da matriz de distância de Mahalanobis.
         output_path = Path(outputPath)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         if len(distanceMatrix) < 2:
@@ -17,8 +17,8 @@ class SimilarityDendrogramPlot:
         figure_width = max(12.0, len(distanceMatrix.index) * 1.15)
         figure, axis = plt.subplots(figsize=(figure_width, 6.5))
         dendrogram(linked, labels=list(distanceMatrix.index), ax=axis)
-        axis.set_title("Attack Distance Dendrogram")
-        axis.set_xlabel("Attack")
+        axis.set_title("Class Distance Dendrogram")
+        axis.set_xlabel("Class")
         axis.set_ylabel("Mahalanobis Distance")
         for label in axis.get_xticklabels():
             label.set_rotation(35)
