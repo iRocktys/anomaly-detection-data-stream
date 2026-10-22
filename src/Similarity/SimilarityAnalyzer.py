@@ -6,6 +6,7 @@ from sklearn.covariance import LedoitWolf
 from sklearn.preprocessing import StandardScaler
 
 from src.Data.FeatureAudit import buildFeatureRemovalReport
+from src.Similarity.Preprocessing import SimilarityPreprocessor
 
 
 class SimilarityAnalyzer:
@@ -58,13 +59,16 @@ class SimilarityAnalyzer:
         return matrix
 
     # Executa os cálculos em memória e salva somente features selecionadas, centroides e matrizes.
-    def run(self, selection, outputDirectory="output/Similarity", downsample="random", randomSeed=42):
+    def run(self, selection, outputDirectory="output/Similarity", downsample="random", randomSeed=42,
+            saveIntermediate=False, intermediateDirectory=None):
         frame, selectedFeatures = selection["frame"], list(selection["selectedFeatures"])
         if "BENIGN" not in set(frame.Label) or frame.Label.nunique() < 2:
             raise ValueError("A similaridade precisa incluir BENIGN e pelo menos um ataque.")
         if not selectedFeatures or not np.isfinite(frame[selectedFeatures].to_numpy(dtype=float)).all():
             raise ValueError("A análise precisa receber características selecionadas e finitas.")
         balanced, summary = self.selectStatisticsSamples(frame, downsample, randomSeed)
+        if downsample == "random":
+            SimilarityPreprocessor.saveIntermediateFrame(balanced, "04_Balanced", saveIntermediate, intermediateDirectory)
         constants = [f for f in selectedFeatures if balanced[f].nunique(dropna=False) <= 1]
         features = [f for f in selectedFeatures if f not in constants]
         removed = buildFeatureRemovalReport([{"Stage": "Covariance", "Feature": f,
@@ -75,6 +79,8 @@ class SimilarityAnalyzer:
         standardized = balanced[["Timestamp"]].copy()
         standardized[features] = scaler.transform(balanced[features]) if scaler is not None else balanced[features].to_numpy()
         standardized["Label"] = balanced.Label
+        if scaler is not None:
+            SimilarityPreprocessor.saveIntermediateFrame(standardized, "05_Standardized", saveIntermediate, intermediateDirectory)
         centers = self.calculateCentroids(standardized, features)
         residuals = self.buildWithinClassResiduals(standardized, centers, features)
         covariance, inverse, shrinkage = self.estimateCommonCovariance(residuals, features)
@@ -90,6 +96,18 @@ class SimilarityAnalyzer:
         centers.to_csv(output / "class_centroids_standardized.csv")
         covariance.to_csv(output / "common_within_class_covariance.csv")
         distances.to_csv(output / "mahalanobis_distance_matrix.csv")
+        # Snapshot único da mesma execução, independente dos intermediários opcionais.
+        np.savez_compressed(
+            output / "mahalanobis_plot_data.npz",
+            features=np.asarray(features, dtype=str),
+            values=standardized[features].to_numpy(dtype=float),
+            labels=standardized.Label.to_numpy(dtype=str),
+            timestamps=standardized.Timestamp.astype(str).to_numpy(dtype=str),
+            classes=centers.index.to_numpy(dtype=str),
+            centroids=centers.to_numpy(dtype=float),
+            covariance=covariance.to_numpy(dtype=float),
+        )
         return {"centroids": centers, "covariance": covariance, "distanceMatrix": distances,
                 "features": features, "removedFeatures": removed, "classSummary": summary,
-                "selectedFeatures": selectedTable, "shrinkage": shrinkage}
+                "selectedFeatures": selectedTable, "shrinkage": shrinkage,
+                "statisticsFrame": standardized, "inverseCovariance": inverse}

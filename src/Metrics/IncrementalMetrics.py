@@ -58,6 +58,3 @@ class IncrementalMetrics:
         self.fp = 0
         self.fn = 0
 
-    def safeDivide(self, numerator, denominator):
-        # Executa uma divisão protegida contra denominadores iguais a zero.
-        return Metrics.safeDivide(numerator, denominator)

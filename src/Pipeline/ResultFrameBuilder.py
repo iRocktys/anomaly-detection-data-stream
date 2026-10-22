@@ -22,21 +22,21 @@ class ResultFrameBuilder:
         windowSize = max(1, int(windowSize))
         evaluatedFrame = self.selectEvaluatedFrame(instanceFrame)
         rows = []
+        cumulativeCounts = dict(tp=0, tn=0, fp=0, fn=0)
+        metadata = self._metadata(evaluatedFrame)
 
         for start in range(0, len(evaluatedFrame), windowSize):
             end = min(start + windowSize, len(evaluatedFrame))
             window = evaluatedFrame.iloc[start:end]
-            cumulative = evaluatedFrame.iloc[:end]
             windowMetrics = Metrics.calculate(
                 window["isAttack"],
                 window["predictedLabel"],
             )
-            cumulativeMetrics = Metrics.calculate(
-                cumulative["isAttack"],
-                cumulative["predictedLabel"],
-            )
+            for name in cumulativeCounts:
+                cumulativeCounts[name] += windowMetrics[name]
+            cumulativeMetrics = Metrics.fromCounts(**cumulativeCounts)
 
-            row = self._metadata(evaluatedFrame)
+            row = dict(metadata)
             row.update(
                 {
                     "warmup": int(evaluatedFrame["warmup"].iloc[0]),

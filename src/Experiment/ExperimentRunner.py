@@ -65,60 +65,43 @@ class ExperimentRunner:
             target_label_col=dataset.targetColumn,
             binary_label=dataset.binaryLabel,
         )
-        preprocessing = parameters["preprocessing"]
-        execution = parameters["execution"]
-        model = parameters["model"]
-        imputer = ImputerRegistry.create(preprocessing["imputer"], preprocessing.get("imputerParameters"))
-        normalizer = NormalizerRegistry.create(preprocessing["normalizer"], preprocessing.get("normalizerParameters"))
-        result_manager = ResultManager(outputDirectory)
-        if self.task == "classification":
-            ClassifierRegistry.normalizeCode(model["code"])
-            pipeline = ClassificationPipeline(
-                stream=stream,
-                datasetName=dataset.name,
-                modelCode=model["code"],
-                labelNames=label_names,
-                modelParameters=model.get("parameters", {}),
-                imputer=imputer,
-                normalizer=normalizer,
-                metricsWindowSize=int(execution["metricsWindowSize"]),
-                outputPath=outputDirectory,
-                seed=int(execution["seed"]),
-                generatePlots=bool(execution["generatePlots"]),
-                initialWarmupSize=int(execution.get("initialWarmupSize", 0)),
-                resultManager=result_manager,
-                strictTrainingErrors=bool(execution.get("strictTrainingErrors", False)),
-            )
-        else:
-            threshold_config = parameters["threshold"]
-            training = parameters["training"]
-            threshold = ThresholdRegistry.create(
-                threshold_config["name"],
-                threshold_config.get("parameters", {}),
-            )
-            pipeline = TrainingPipeline(
-                stream=stream,
-                datasetName=dataset.name,
-                modelCode=model["code"],
-                threshold=threshold,
-                labelNames=label_names,
-                modelParameters=model.get("parameters", {}),
-                imputer=imputer,
-                normalizer=normalizer,
-                trainingStrategy=TrainingStrategyRegistry.create(training["strategy"], training.get("parameters")),
-                scoreWindowSizes=tuple(threshold_config.get("scoreWindowSizes", ())),
-                metricsWindowSize=int(execution["metricsWindowSize"]),
-                outputPath=outputDirectory,
-                normalClassIndex=defaults.DEFAULT_NORMAL_CLASS_INDEX,
-                seed=int(execution["seed"]),
-                generatePlots=bool(execution["generatePlots"]),
-                initialWarmupSize=int(execution["initialWarmupSize"]),
-                thresholdScoreSource=threshold_config.get("scoreSource", "raw"),
-                resultManager=result_manager,
-                strictTrainingErrors=bool(execution.get("strictTrainingErrors", False)),
-            )
+        pipeline = self.createPipeline(
+            task=self.task, stream=stream, datasetName=dataset.name, labelNames=label_names,
+            parameters=parameters, outputDirectory=outputDirectory,
+            resultManager=ResultManager(outputDirectory),
+            generatePlots=bool(parameters["execution"]["generatePlots"]),
+        )
         result = pipeline.run()
         result["featureRemovalReport"] = processor.getFeatureRemovalReport()
         result["featureNames"] = tuple(feature_names)
         result["targetNames"] = tuple(target_names)
         return result
+
+    @staticmethod
+    def createPipeline(task, stream, datasetName, labelNames, parameters,
+                       outputDirectory, resultManager, generatePlots):
+        # Montagem única usada pelo experimento normal e por cada trial da otimização.
+        if task not in {"anomaly", "classification"}:
+            raise ValueError("Task must be 'anomaly' or 'classification'.")
+        preprocessing, execution, model = (parameters[name] for name in ("preprocessing", "execution", "model"))
+        common = dict(
+            stream=stream, datasetName=datasetName, modelCode=model["code"], labelNames=labelNames,
+            modelParameters=model.get("parameters", {}),
+            imputer=ImputerRegistry.create(preprocessing["imputer"], preprocessing.get("imputerParameters")),
+            normalizer=NormalizerRegistry.create(preprocessing["normalizer"], preprocessing.get("normalizerParameters")),
+            metricsWindowSize=int(execution["metricsWindowSize"]), outputPath=outputDirectory,
+            seed=int(execution["seed"]), generatePlots=bool(generatePlots),
+            initialWarmupSize=int(execution.get("initialWarmupSize", 0)),
+            resultManager=resultManager, strictTrainingErrors=bool(execution.get("strictTrainingErrors", False)),
+        )
+        if task == "classification":
+            ClassifierRegistry.normalizeCode(model["code"])
+            return ClassificationPipeline(**common)
+        threshold, training = parameters["threshold"], parameters["training"]
+        return TrainingPipeline(
+            **common, threshold=ThresholdRegistry.create(threshold["name"], threshold.get("parameters", {})),
+            trainingStrategy=TrainingStrategyRegistry.create(training["strategy"], training.get("parameters")),
+            scoreWindowSizes=tuple(threshold.get("scoreWindowSizes", ())),
+            normalClassIndex=defaults.DEFAULT_NORMAL_CLASS_INDEX,
+            thresholdScoreSource=threshold.get("scoreSource", "raw"),
+        )

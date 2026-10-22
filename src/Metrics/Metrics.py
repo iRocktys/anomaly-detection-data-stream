@@ -76,13 +76,6 @@ class Metrics:
             "mcc": mcc,
         }
 
-    @staticmethod
-    def evaluateFrame(frame, trueColumn="isAttack", predictionColumn="prediction", readyColumn=None):
-        # Executa a responsabilidade específica desta função dentro do módulo atual.
-        selected = frame
-        if readyColumn and readyColumn in selected.columns:
-            selected = selected[selected[readyColumn].astype(bool)]
-        return Metrics.calculate(selected[trueColumn], selected[predictionColumn])
 
     @staticmethod
     def windowed(frame, windowSize=1000, trueColumn="isAttack", predictionColumn="prediction", readyColumn=None):
@@ -104,32 +97,6 @@ class Metrics:
         return pd.DataFrame(rows, columns=columns)
 
 
-    @staticmethod
-    def attackBreakdown(frame, labelColumn="trueLabel", nameColumn="labelName", predictionColumn="prediction", normalClassIndex=0):
-        # Executa a responsabilidade específica desta função dentro do módulo atual.
-        rows = []
-        if labelColumn not in frame.columns:
-            return rows
-        for labelValue, group in frame.groupby(labelColumn, sort=True):
-            labelValue = int(labelValue)
-            if labelValue == int(normalClassIndex):
-                continue
-            labelName = (
-                str(group[nameColumn].iloc[0])
-                if nameColumn in group.columns and not group.empty
-                else str(labelValue)
-            )
-            total = int(len(group))
-            detected = int((group[predictionColumn].astype(int) == 1).sum())
-            rows.append({
-                "trueLabel": labelValue,
-                "labelName": labelName,
-                "instances": total,
-                "detected": detected,
-                "falseNegatives": total - detected,
-                "recall": Metrics.safeDivide(detected, total),
-            })
-        return rows
 
     @staticmethod
     def safeDivide(numerator, denominator):

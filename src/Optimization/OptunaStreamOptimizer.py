@@ -9,26 +9,27 @@ import pandas as pd
 from src.Anomaly.Models import ModelRegistry
 from src.Classification.Models import ClassifierRegistry
 from src.Data.Processor import DataStreamProcessor
-from src.Data.Registries import ImputerRegistry, NormalizerRegistry
 from src.Experiment.Configuration import deepMerge, mergeParameters
+from src.Experiment.ExperimentRunner import ExperimentRunner
 from src.Optimization.AifSearchSpace import AifSearchSpace
 from src.Optimization.ClassifierSearchSpace import ClassifierSearchSpace
 from src.Optimization.DspotSearchSpace import DspotSearchSpace
 from src.Optimization.OptimizationConfig import OptimizationConfig, PreparedDataset
-from src.Pipeline.ClassificationPipeline import ClassificationPipeline
 from src.Pipeline.MetricsResultManager import MetricsResultManager
 from src.Pipeline.ResultManager import ResultManager
-from src.Pipeline.TrainingPipeline import TrainingPipeline
 from src.Thresholds.Incremental.DspotThreshold import DspotCalibrationError
-from src.Thresholds.ThresholdRegistry import ThresholdRegistry
-from src.Training.StrategyRegistry import TrainingStrategyRegistry
 
 
 class OptunaStreamOptimizer:
     # Inicializa o otimizador preservando os argumentos originais e acrescentando suporte opcional a classificadores.
-    def __init__(self, config, searchSpace=None, modelSearchSpace=None, classifierSearchSpace=None):
+    def __init__(self, config, searchSpace=None, modelSearchSpace=None, classifierSearchSpace=None,
+                 showFeatureRemovalReport=False):
         if not isinstance(config, OptimizationConfig):
             raise TypeError("config must be an OptimizationConfig.")
+        if not isinstance(showFeatureRemovalReport, bool):
+            raise ValueError("showFeatureRemovalReport deve ser booleano.")
+        self.showFeatureRemovalReport = showFeatureRemovalReport
+        self.featureRemovalReports = {}
         self.config = config
         self.parameters = config.effectiveParameters
         self.searchSpace = searchSpace or DspotSearchSpace(config.dspotSearchSpace)
@@ -38,6 +39,7 @@ class OptunaStreamOptimizer:
     # Otimiza cada dataset, salva os trials e reexecuta somente a melhor configuração com artefatos completos.
     def run(self):
         optuna = self._loadOptuna()
+        self.featureRemovalReports = {}
         prepared_datasets = [self._prepareDataset(dataset) for dataset in self.config.datasetConfigs]
         best_results = {}
         summary_rows = []
@@ -107,6 +109,7 @@ class OptunaStreamOptimizer:
             "bestResults": best_results,
             "summary": summary,
             "summaryPath": str(summary_path),
+            "featureRemovalReports": self.featureRemovalReports,
         }
 
     # Continua sugerindo configurações até completar a quantidade solicitada de trials válidos.
@@ -216,7 +219,9 @@ class OptunaStreamOptimizer:
             target_label_col=dataset.targetColumn,
             binary_label=dataset.binaryLabel,
         )
-        processor.reportFeatureRemovals(f"Features removidas na otimização de {dataset.name}")
+        self.featureRemovalReports[dataset.name] = processor.getFeatureRemovalReport()
+        if self.showFeatureRemovalReport:
+            processor.reportFeatureRemovals(f"Features removidas na otimização de {dataset.name}")
         attack_instances = sum(
             1
             for label in label_names
@@ -239,50 +244,11 @@ class OptunaStreamOptimizer:
 
     # Cria componentes novos para cada execução usando o mesmo pipeline empregado no treinamento normal.
     def _createPipeline(self, dataset, parameters, resultManager, generatePlots):
-        preprocessing = parameters["preprocessing"]
-        execution = parameters["execution"]
-        model = parameters["model"]
-        imputer = ImputerRegistry.create(preprocessing["imputer"], preprocessing.get("imputerParameters"))
-        normalizer = NormalizerRegistry.create(preprocessing["normalizer"], preprocessing.get("normalizerParameters"))
-        if self.config.task == "classification":
-            return ClassificationPipeline(
-                stream=dataset.stream,
-                datasetName=dataset.name,
-                modelCode=model["code"],
-                labelNames=dataset.labelNames,
-                modelParameters=model.get("parameters", {}),
-                imputer=imputer,
-                normalizer=normalizer,
-                metricsWindowSize=int(execution["metricsWindowSize"]),
-                outputPath=self.config.outputRoot,
-                seed=int(execution["seed"]),
-                generatePlots=bool(generatePlots),
-                initialWarmupSize=int(execution.get("initialWarmupSize", 0)),
-                resultManager=resultManager,
-                strictTrainingErrors=bool(execution.get("strictTrainingErrors", False)),
-            )
-        threshold_config = parameters["threshold"]
-        training = parameters["training"]
-        return TrainingPipeline(
-            stream=dataset.stream,
-            datasetName=dataset.name,
-            modelCode=model["code"],
-            threshold=ThresholdRegistry.create(threshold_config["name"], threshold_config.get("parameters", {})),
-            labelNames=dataset.labelNames,
-            modelParameters=model.get("parameters", {}),
-            imputer=imputer,
-            normalizer=normalizer,
-            trainingStrategy=TrainingStrategyRegistry.create(training["strategy"], training.get("parameters")),
-            scoreWindowSizes=tuple(threshold_config.get("scoreWindowSizes", ())),
-            metricsWindowSize=int(execution["metricsWindowSize"]),
-            outputPath=self.config.outputRoot,
-            normalClassIndex=0,
-            seed=int(execution["seed"]),
-            generatePlots=bool(generatePlots),
-            initialWarmupSize=int(execution["initialWarmupSize"]),
-            thresholdScoreSource=threshold_config.get("scoreSource", "raw"),
-            resultManager=resultManager,
-            strictTrainingErrors=bool(execution.get("strictTrainingErrors", False)),
+        return ExperimentRunner.createPipeline(
+            task=self.config.task, stream=dataset.stream, datasetName=dataset.name,
+            labelNames=dataset.labelNames, parameters=parameters,
+            outputDirectory=self.config.outputRoot, resultManager=resultManager,
+            generatePlots=generatePlots,
         )
 
     # Normaliza o código do modelo usando o registry adequado à tarefa corrente.

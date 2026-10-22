@@ -443,34 +443,8 @@ class ResultManager:
 
         return value.upper()
 
-    def buildWindowFrame(
-        self,
-        instanceFrame,
-        windowSize,
-    ):
-        # Constrói a tabela de métricas por janela a partir dos resultados individuais da stream.
-        return self.frameBuilder.buildWindowFrame(
-            instanceFrame,
-            windowSize,
-        )
 
-    def buildStreamMetricsFrame(
-        self,
-        instanceFrame,
-    ):
-        # Constrói as métricas globais da execução a partir das instâncias avaliadas.
-        return self.frameBuilder.buildStreamMetricsFrame(
-            instanceFrame
-        )
 
-    def selectEvaluatedFrame(
-        self,
-        instanceFrame,
-    ):
-        # Retorna somente as instâncias pertencentes à região efetivamente avaliada da stream.
-        return self.frameBuilder.selectEvaluatedFrame(
-            instanceFrame
-        )
 
     def generatePlots(
         self,

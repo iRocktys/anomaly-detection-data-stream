@@ -1,4 +1,6 @@
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 
@@ -6,6 +8,23 @@ from src.Data.FeatureAudit import buildFeatureRemovalReport
 
 
 class SimilarityPreprocessor:
+    intermediateNames = ("01_Cleaned", "02_Imputed", "03_Selected", "04_Balanced", "05_Standardized")
+
+    @staticmethod
+    def saveIntermediateFrame(frame, stage, saveIntermediate=False, outputDirectory=None):
+        # Exporta somente o DataFrame produzido pela etapa, sem refazer transformações.
+        if not isinstance(saveIntermediate, bool):
+            raise ValueError("saveIntermediate deve ser booleano.")
+        if not saveIntermediate:
+            return
+        if stage not in SimilarityPreprocessor.intermediateNames:
+            raise ValueError("Etapa intermediária desconhecida.")
+        if outputDirectory is None:
+            raise ValueError("Informe intermediateDirectory para salvar intermediários.")
+        directory = Path(outputDirectory)
+        directory.mkdir(parents=True, exist_ok=True)
+        frame.to_csv(directory / f"{stage}.csv", index=False)
+
     metadataColumns = {"Timestamp", "WindowStart", "WindowEnd", "WindowSeconds", "Attack", "Label",
                        "OriginalTimestamp", "OriginalWindowStart", "OriginalWindowEnd", "FlowStart", "FlowEnd",
                        "SourceFile", "SourceRow", "SourceDataset", "SourceWindowRow", "TargetAttack", "InstanceIndex",
@@ -77,7 +96,19 @@ class SimilarityPreprocessor:
         return candidates, records
 
     # Prepara todas as classes em memória sem gerar arquivos intermediários.
-    def runFromFile(self, datasetPath, selectedFeatures=None, removedFeatures=None):
+    def runFromFile(self, datasetPath, selectedFeatures=None, removedFeatures=None,
+                    saveIntermediate=False, intermediateDirectory=None):
+        if not isinstance(saveIntermediate, bool):
+            raise ValueError("saveIntermediate deve ser booleano.")
+        if saveIntermediate:
+            if intermediateDirectory is None:
+                raise ValueError("Informe intermediateDirectory para salvar intermediários.")
+            directory = Path(intermediateDirectory)
+            if Path(datasetPath).resolve() in {(directory / f"{name}.csv").resolve() for name in self.intermediateNames}:
+                raise ValueError("A entrada não pode coincidir com um arquivo intermediário.")
+            # Uma nova execução elimina somente snapshots conhecidos da execução anterior.
+            for name in self.intermediateNames:
+                (directory / f"{name}.csv").unlink(missing_ok=True)
         frame = self.loadAnalysisFrame(datasetPath)
         candidates, records = self.selectNumericFeatures(frame, selectedFeatures, removedFeatures)
         data, eligible = frame.copy(), []
@@ -98,11 +129,16 @@ class SimilarityPreprocessor:
                 eligible.append(feature)
         if not eligible:
             raise ValueError("Nenhuma característica permaneceu após a limpeza.")
+        self.saveIntermediateFrame(data[["Timestamp"] + eligible + ["Label"]], "01_Cleaned",
+                                   saveIntermediate, intermediateDirectory)
         medians = data[eligible].median() if self.imputation == "median" else pd.Series(dtype=float)
         if self.imputation == "median":
             data[eligible] = data[eligible].fillna(medians)
         invalid = [f for f in eligible if not np.isfinite(data[f].to_numpy(dtype=float)).all()]
         if invalid:
             raise ValueError(f"Features ainda não finitas após a imputação: {invalid}")
+        if self.imputation == "median":
+            self.saveIntermediateFrame(data[["Timestamp"] + eligible + ["Label"]], "02_Imputed",
+                                       saveIntermediate, intermediateDirectory)
         return {"frame": data[["Timestamp"] + eligible + ["Label"]].copy(), "features": eligible,
                 "normalization": self.normalization, "removedFeatures": buildFeatureRemovalReport(records)}

@@ -5,6 +5,7 @@ import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 
 from src.Data.FeatureAudit import buildFeatureRemovalReport
+from src.Similarity.Preprocessing import SimilarityPreprocessor
 
 
 class SimilarityOneVsAll:
@@ -18,7 +19,7 @@ class SimilarityOneVsAll:
         self.randomSeed, self.nJobs = randomSeed, nJobs
 
     # Seleciona a união dos Top-K usando todas as classes e mantém os resultados em memória.
-    def run(self, prepared):
+    def run(self, prepared, saveIntermediate=False, intermediateDirectory=None):
         frame, features = prepared["frame"], list(prepared["features"])
         classes = sorted(frame.Label.unique())
         if "BENIGN" not in classes or len(classes) < 2:
@@ -48,6 +49,8 @@ class SimilarityOneVsAll:
                     "Reason": "Não selecionada no Top-K de nenhuma classe"} for f in features if f not in union])
         table = pd.DataFrame([{"Class": label, "SelectedCount": len(fs), "Features": ", ".join(fs)}
                               for label, fs in perClass.items()])
-        return {"frame": frame[["Timestamp"] + selected + ["Label"]].copy(), "selectedFeatures": selected,
+        selectedFrame = frame[["Timestamp"] + selected + ["Label"]].copy()
+        SimilarityPreprocessor.saveIntermediateFrame(selectedFrame, "03_Selected", saveIntermediate, intermediateDirectory)
+        return {"frame": selectedFrame, "selectedFeatures": selected,
                 "selectedFeaturesByClass": perClass, "featureTable": table, "normalization": prepared["normalization"],
                 "removedFeatures": removed}

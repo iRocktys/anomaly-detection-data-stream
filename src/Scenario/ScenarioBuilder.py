@@ -62,6 +62,55 @@ class WindowScenarioBuilder:
         generator = np.random.default_rng(np.random.SeedSequence([int(randomSeed), *attackSeed, stratum]))
         return generator.permutation(indices)
 
+    def inspectAvailability(self, sequence):
+        # Consulta as bases agregadas e resume os três estratos antes da montagem.
+        names = [FlowCSVReader.normalizeLabel(name) for name in sequence]
+        rows = []
+        for attack in dict.fromkeys(names):
+            frame = self.loadWindows(self.attacksDirectory / f"{attack}.csv", attack)
+            strata = self.buildTemporalStrata(frame)
+            rows.append({"Attack": attack, "Occurrences": names.count(attack),
+                         "OriginalSpanSeconds": (frame.Timestamp.max() - frame.Timestamp.min()).total_seconds() + self.windowSeconds,
+                         "AvailableWindows": len(frame),
+                         "BeginningWindows": int((strata == 0).sum()),
+                         "MiddleWindows": int((strata == 1).sum()),
+                         "EndWindows": int((strata == 2).sum()),
+                         "InternalBenignWindows": int(frame.Label.eq("BENIGN").sum())})
+        return pd.DataFrame(rows)
+
+    def buildVariants(self, scenarioName, sequence, outputDirectory="data/scenario",
+                      blockSeconds=(60, 120, 180), initialBenignSeconds=2000,
+                      betweenBenignSeconds=120, randomSeed=42):
+        # Executa variantes independentes e mantém o notebook apenas como configuração.
+        name = str(scenarioName).strip()
+        if not name or any(c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-" for c in name):
+            raise ValueError("scenarioName deve conter somente letras, números, '_' ou '-'.")
+        durations = list(dict.fromkeys(float(value) for value in blockSeconds))
+        if not durations:
+            raise ValueError("Informe pelo menos uma duração por bloco.")
+        for value in durations:
+            if self.durationToWindows(value) < 3:
+                raise ValueError("Cada bloco precisa conter pelo menos três janelas.")
+        availability = self.inspectAvailability(sequence)
+        results, summaries = [], {}
+        for seconds in durations:
+            path = Path(outputDirectory) / name / f"{name}_{self.windowSeconds:g}s_{seconds:g}s.csv"
+            row = {"Scenario": name, "WindowSeconds": self.windowSeconds, "BlockSeconds": seconds}
+            try:
+                result = self.build(sequence=sequence, outputPath=path, blockSeconds=seconds,
+                                    initialBenignSeconds=initialBenignSeconds,
+                                    betweenBenignSeconds=betweenBenignSeconds, randomSeed=randomSeed,
+                                    benignStartSeconds=0, allowBenignReuse=False)
+            except ValueError as error:
+                row.update(Status="Inviável", Reason=str(error), Path=None, BlocksPath=None)
+            else:
+                row.update(Status="Gerado", Reason="", Path=result["datasetPath"],
+                           BlocksPath=result["blocksPath"], Windows=result["windows"],
+                           AttackWindows=result["attackWindows"])
+                summaries[seconds] = result["summary"]
+            results.append(row)
+        return {"availability": availability, "results": pd.DataFrame(results), "blocks": summaries}
+
     # Planeja todas as ocorrências e distribui janelas distintas de início, meio e fim entre os blocos.
     def selectAttackBlocks(self, sequence, blockSeconds, randomSeed=42):
         if isinstance(randomSeed, bool) or not isinstance(randomSeed, Integral) or randomSeed < 0:
@@ -126,7 +175,7 @@ class WindowScenarioBuilder:
                 gaps[index] = start - cursor
                 cursor = start + len(blocks[index][2])
         benignCursor = self.durationToWindows(benignStartSeconds)
-        pieces, manifests, position = [], [], 0
+        pieces, summaries, position = [], [], 0
         for index in range(len(blocks) + 1):
             count = max(len(benign) - benignCursor, 0) if index == len(blocks) else gaps[index]
             if not allowBenignReuse and benignCursor + count > len(benign):
@@ -140,35 +189,37 @@ class WindowScenarioBuilder:
             for target, kind, blockIndex, sourceRows, frame, strata in selections:
                 if frame.empty:
                     continue
-                columns = [c for c in ("Timestamp", "WindowStart", "WindowEnd", "Label", "FlowCount", "AttackCount", "BenignCount") if c in frame]
-                manifest = frame[columns].copy().rename(columns={"Timestamp": "OriginalTimestamp", "WindowStart": "OriginalWindowStart", "WindowEnd": "OriginalWindowEnd"})
-                manifest["SourceWindowRow"] = sourceRows
-                manifest["TemporalStratum"] = np.array(["beginning", "middle", "end"], dtype=object)[np.maximum(strata, 0)] if kind == "mixed_attack" else "benign"
-                manifest["SamplingSeed"] = int(randomSeed) if kind == "mixed_attack" else pd.NA
-                manifest["SourceDataset"] = str(self.benignPath if kind == "benign" else self.attacksDirectory / f"{target}.csv")
-                manifest["TargetAttack"], manifest["ScenarioPart"], manifest["BlockIndex"] = target, kind, blockIndex
-                manifest["InstanceIndex"] = np.arange(position, position + len(frame))
+                origin = pd.Timestamp(startTimestamp)
+                frequency = pd.to_timedelta(self.windowSeconds, unit="s")
+                summaries.append({
+                    "BlockIndex": blockIndex, "ScenarioPart": kind, "TargetAttack": target,
+                    "Windows": len(frame), "Start": origin + position * frequency,
+                    "End": origin + (position + len(frame) - 1) * frequency,
+                    "InstanceStart": position, "InstanceEnd": position + len(frame) - 1,
+                    "AttackWindows": int(frame.Label.ne("BENIGN").sum()),
+                    "BenignWindows": int(frame.Label.eq("BENIGN").sum()),
+                    "BeginningWindows": int((strata == 0).sum()),
+                    "MiddleWindows": int((strata == 1).sum()),
+                    "EndWindows": int((strata == 2).sum()),
+                    "OccupiedSeconds": len(frame) * self.windowSeconds,
+                    "WindowSeconds": self.windowSeconds, "SamplingSeed": int(randomSeed),
+                    "InitialBenignSeconds": initialBenignSeconds,
+                    "BetweenBenignSeconds": betweenBenignSeconds,
+                    "BenignStartSeconds": benignStartSeconds, "AllowBenignReuse": allowBenignReuse,
+                    "SourceDataset": str(self.benignPath if kind == "benign" else self.attacksDirectory / f"{target}.csv"),
+                    "OriginalStart": frame.Timestamp.min(), "OriginalEnd": frame.Timestamp.max(),
+                })
                 position += len(frame)
                 pieces.append(frame)
-                manifests.append(manifest)
         full = pd.concat(pieces, ignore_index=True)
-        manifest = pd.concat(manifests, ignore_index=True)
         features = [column for column in full if column not in self.metadataColumns]
         dataset = full[["Timestamp"] + features + ["Label"]].copy()
         dataset["Timestamp"] = pd.date_range(startTimestamp, periods=len(dataset), freq=pd.to_timedelta(self.windowSeconds, unit="s"))
-        manifest.insert(0, "Timestamp", dataset.Timestamp)
         path = Path(outputPath)
         path.parent.mkdir(parents=True, exist_ok=True)
-        manifestPath = path.with_name(f"{path.stem}_manifest.csv")
+        blocksPath = path.with_name(f"{path.stem}_blocks.csv")
+        summary = pd.DataFrame(summaries)
         dataset.to_csv(path, index=False)
-        manifest[[c for c in manifest if c != "Label"] + ["Label"]].to_csv(manifestPath, index=False)
-        summary = manifest.groupby(["BlockIndex", "ScenarioPart", "TargetAttack"], sort=False).agg(
-            Windows=("Label", "size"), Start=("Timestamp", "min"), End=("Timestamp", "max"),
-            AttackWindows=("Label", lambda values: int(values.ne("BENIGN").sum())),
-            BeginningWindows=("TemporalStratum", lambda values: int(values.eq("beginning").sum())),
-            MiddleWindows=("TemporalStratum", lambda values: int(values.eq("middle").sum())),
-            EndWindows=("TemporalStratum", lambda values: int(values.eq("end").sum()))).reset_index()
-        summary["OccupiedSeconds"] = summary.Windows * self.windowSeconds
-        summary.to_csv(path.with_name(f"{path.stem}_blocks.csv"), index=False)
-        return {"datasetPath": str(path), "manifestPath": str(manifestPath), "summary": summary,
+        summary.to_csv(blocksPath, index=False)
+        return {"datasetPath": str(path), "blocksPath": str(blocksPath), "summary": summary,
                 "windows": len(dataset), "attackWindows": int(dataset.Label.ne("BENIGN").sum())}
