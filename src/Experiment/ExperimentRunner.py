@@ -42,6 +42,10 @@ class ExperimentRunner:
             results[dataset.name] = result
             metrics = result["streamMetricsFrame"].iloc[0].to_dict()
             records.append({"experiment": experiment_name, "dataset": dataset.name, **metrics})
+            print("Stream | " + " | ".join(
+                f"{name}={float(metrics[name]):.4f}"
+                for name in ("accuracy", "precision", "recall", "f1", "mcc") if name in metrics
+            ))
         return {
             "experimentName": experiment_name,
             "task": self.task,
@@ -56,7 +60,7 @@ class ExperimentRunner:
             raise FileNotFoundError(f"Dataset not found: {dataset.path}")
         dataframe = pd.read_csv(dataset.path, low_memory=False)
         processor = DataStreamProcessor(
-            logging=True,
+            logging=False,
             selected_features=dataset.selectedFeatures,
             removed_features=dataset.removedFeatures,
         )

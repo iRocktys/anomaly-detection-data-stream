@@ -45,8 +45,13 @@ class FlowCSVReader:
         data["FlowEnd"] = data.FlowStart + pd.to_timedelta(duration.fillna(0).clip(lower=0), unit="us")
         if data.FlowStart.isna().any() or data.FlowEnd.isna().any():
             raise ValueError(f"Horário inválido em {sourceFile}; corrija o CSV antes de agregar.")
-        data["SourceFile"] = str(Path(sourceFile).resolve())
-        data["SourceRow"] = np.arange(firstRow, firstRow + len(data))
+        if ("SourceFile" in data) != ("SourceRow" in data):
+            raise ValueError("SourceFile e SourceRow precisam estar presentes juntos.")
+        if "SourceFile" not in data:
+            data["SourceFile"] = str(Path(sourceFile).resolve())
+            data["SourceRow"] = np.arange(firstRow, firstRow + len(data))
+        elif data.SourceFile.isna().any() or data.SourceRow.isna().any():
+            raise ValueError("Identificação original incompleta.")
         return data
 
     # Percorre um CSV preservando a identificação e a ordem original de suas linhas.

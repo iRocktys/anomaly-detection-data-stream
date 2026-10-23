@@ -1,16 +1,26 @@
 import numpy as np
 import pandas as pd
 from capymoa.stream import NumpyStream
+from src.Scenario.FlowCSVReader import FlowCSVReader
 
 from src.Data.FeatureAudit import buildFeatureRemovalReport, printFeatureRemovalReport
 
 
 class DataStreamProcessor:
+    metadataColumns = {
+        "Timestamp", "OriginalTimestamp", "FlowStart", "FlowEnd", "SourceFile", "SourceRow",
+        "SourceDataset", "SourceWindowRow", "InstanceIndex", "InstanceId", "BlockIndex",
+        "ScenarioPart", "AttackBlock", "TemporalStratum", "SamplingSeed", "WindowStart",
+        "WindowEnd", "WindowSeconds", "TargetAttack", "Attack", "Flow_ID", "Source_IP",
+        "Destination_IP", "SimillarHTTP", "AttackCount", "BenignCount", "OtherAttackCount",
+        "AttackRatio", "RepeatOfBlock", "RepeatAttackBlocks",
+    }
+
     # Inicializa o processador com seleção e remoção opcionais de features.
     def __init__(self, logging=True, selected_features=None, removed_features=None):
         self.logging = bool(logging)
-        self.selected_features = selected_features
-        self.removed_features = removed_features
+        self.selected_features = None if selected_features is None else list(dict.fromkeys(FlowCSVReader.normalizeColumnName(f) for f in selected_features))
+        self.removed_features = None if removed_features is None else list(dict.fromkeys(FlowCSVReader.normalizeColumnName(f) for f in removed_features))
         self.featureRemovalRecords = []
 
     # Exibe mensagens de processamento somente quando o logging estiver habilitado.
@@ -52,6 +62,9 @@ class DataStreamProcessor:
         missing_features = [feature for feature in selected_features if feature not in df.columns]
         if missing_features:
             raise ValueError(f"Selected features were not found in the dataset: {missing_features}")
+        forbidden = set(selected_features) & self.metadataColumns
+        if forbidden:
+            raise ValueError(f"Metadados não podem ser selecionados como features: {sorted(forbidden)}")
         columns_to_keep = list(selected_features)
         if target_label_col not in columns_to_keep:
             columns_to_keep.append(target_label_col)
@@ -71,9 +84,11 @@ class DataStreamProcessor:
 
     # Converte as features para valores numéricos preservando ausências para a imputação online.
     def _prepare_features(self, df, target_label_col):
-        self._record_feature_removals("Metadados", ["Timestamp"] if "Timestamp" in df else [], "Horário não utilizado como preditor")
+        metadata = [column for column in df if column in self.metadataColumns
+                    or column.startswith("Unnamed") or column.lower() == "index"]
+        self._record_feature_removals("Metadados", metadata, "Metadado excluído dos preditores")
         self._record_feature_removals("Alvo", [target_label_col], "Alvo supervisionado; não é um preditor")
-        features = df.drop(columns=[target_label_col, "Timestamp"], errors="ignore").apply(pd.to_numeric, errors="coerce")
+        features = df.drop(columns=metadata + [target_label_col], errors="ignore").apply(pd.to_numeric, errors="coerce")
         features = features.replace([np.inf, -np.inf], np.nan)
         if features.shape[1] == 0:
             raise ValueError("No feature remained after dataset preprocessing.")
@@ -104,8 +119,10 @@ class DataStreamProcessor:
             raise ValueError("Only binary stream encoding is supported; binary_label must remain True.")
         self.featureRemovalRecords = []
         processed_df = df.copy()
-        processed_df.columns = processed_df.columns.astype(str).str.strip()
-        target_label_col = str(target_label_col).strip()
+        processed_df.columns = [FlowCSVReader.normalizeColumnName(c) for c in processed_df.columns]
+        if not processed_df.columns.is_unique:
+            raise ValueError("Colunas duplicadas após normalização dos nomes.")
+        target_label_col = FlowCSVReader.normalizeColumnName(target_label_col)
         self._validate_dataframe(processed_df, target_label_col)
         processed_df, removed_label_rows = self._remove_invalid_label_rows(processed_df, target_label_col)
         self._log(f"Linhas removidas por rótulo ausente ou vazio: {removed_label_rows}.")

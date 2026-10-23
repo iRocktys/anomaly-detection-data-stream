@@ -93,7 +93,7 @@ class WindowDatasetBuilder:
                 if frame.empty or not frame.Label.eq(attack).any():
                     raise ValueError(f"O recorte de {attack} não contém janelas maliciosas.")
                 key = f"{seconds:g}s"
-                path = self.outputDirectory / f"attacks/{key}/{attack}.csv"
+                path = self.outputDirectory / f"attacks/Window_{key}/{attack}.csv"
                 path.parent.mkdir(parents=True, exist_ok=True)
                 frame.to_csv(path, index=False)
                 paths[key][attack] = str(path)
