@@ -1,144 +1,153 @@
-"""Geração contínua de um CSV global, sem rótulos, cenários ou relatórios extras."""
-
+"""Extração única de features e contagens de referência por janela."""
+from collections import Counter
 import csv
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from decimal import Decimal
-from numbers import Integral
+import json
 from pathlib import Path
 import time
 
-from .Features import FEATURE_NAMES, METADATA_NAMES, WindowAccumulator, feature_dictionary
-from .Flows import FlowTracker
-from .Reader import discover_pcaps, iter_merged_packets, utc_timestamp
+from .Features import FEATURE_NAMES, METADATA_NAMES, WindowAccumulator
+from .Reader import iter_merged_packets, utc_timestamp
+
+COUNT_COLUMNS = ['WindowStart', 'Timestamp', 'WindowComplete', 'Packet_Count',
+                 'Benign_Packet_Count', 'Attack_Packet_Count', 'Unknown_Packet_Count',
+                 'Ambiguous_Packet_Count', 'Unmatched_Packet_Count', 'Unsupported_Packet_Count',
+                 'Attack_Packet_Ratio', 'Label_Coverage', 'Attack_Class_Counts']
 
 
-def seconds_ns(value, name):
-    if isinstance(value, bool):
-        raise ValueError(f'{name} deve ser positivo e representável em nanossegundos.')
-    try:
-        decimal = Decimal(str(value))
-        nanos = decimal * 1_000_000_000
-        if not decimal.is_finite() or decimal <= 0 or nanos != nanos.to_integral_value():
-            raise ValueError
-        return int(nanos)
-    except (ValueError, ArithmeticError):
-        raise ValueError(f'{name} deve ser positivo e representável em nanossegundos.') from None
-
-
-@dataclass(frozen=True)
+@dataclass
 class DatasetResult:
-    datasetPath: str
-    featureReportPath: str
+    featuresPath: str
+    countsPath: str
     packetsProcessed: int
     ipv4Packets: int
     windowsWritten: int
     packetLimitReached: bool
     elapsedSeconds: float
+    packetsPerSecond: float
+    labelCoverage: float
+    matchedPackets: int
+    unknownPackets: int
+    ambiguousPackets: int
+    truncatedPackets: int
+    fragmentedPackets: int
+    firstTimestamp: str
+    lastTimestamp: str
+
+    def as_dict(self):
+        return asdict(self)
 
 
 class PcapStatisticsDataset:
-    """O limite é global entre arquivos e inclui pacotes não IPv4.
-
-    maxPackets=None processa a captura inteira. A intercalação cronológica
-    mantém um pacote de antecipação por arquivo; esse buffer não é uma
-    observação processada nem uma linha adicional no dataset.
-    """
-    def __init__(self, windowSeconds=1.0, maxPackets=None,
-                 flowIdleTimeoutSeconds=120.0, subflowGapSeconds=1.0,
-                 packetLengthMode='transport_payload', keepEmptyWindows=True,
-                 progressEvery=None):
-        self.duration_ns = seconds_ns(windowSeconds, 'windowSeconds')
-        self.idle_ns = seconds_ns(flowIdleTimeoutSeconds, 'flowIdleTimeoutSeconds')
-        self.subflow_ns = seconds_ns(subflowGapSeconds, 'subflowGapSeconds')
+    def __init__(self, windowSeconds=1.0, maxPackets=1_000_000, keepEmptyWindows=True,
+                 progressEvery=100_000):
+        duration = Decimal(str(windowSeconds)) * 1_000_000_000
+        if not duration.is_finite() or duration <= 0 or duration != duration.to_integral_value():
+            raise ValueError('windowSeconds deve ser positivo e representável em ns.')
         for name, value in [('maxPackets', maxPackets), ('progressEvery', progressEvery)]:
-            if value is not None and (isinstance(value, bool) or not isinstance(value, Integral) or value < 1):
+            if value is not None and (isinstance(value, bool) or not isinstance(value, int) or value < 1):
                 raise ValueError(f'{name} deve ser inteiro positivo ou None.')
-        if packetLengthMode not in ('transport_payload', 'ip'):
-            raise ValueError('packetLengthMode deve ser transport_payload ou ip.')
-        if not isinstance(keepEmptyWindows, bool):
-            raise ValueError('keepEmptyWindows deve ser booleano.')
-        self.maxPackets = maxPackets
-        self.packetLengthMode = packetLengthMode
-        self.keepEmptyWindows = keepEmptyWindows
-        self.progressEvery = progressEvery
+        self.duration_ns = int(duration)
+        self.maxPackets, self.keepEmptyWindows, self.progressEvery = maxPackets, keepEmptyWindows, progressEvery
 
-    def run(self, pcapDirectory, outputPath, featureReportPath, recursive=True):
-        return self.runFiles(discover_pcaps(pcapDirectory, recursive), outputPath, featureReportPath)
-
-    def runFiles(self, pcapFiles, outputPath, featureReportPath):
-        files = [Path(path).resolve() for path in pcapFiles]
+    def runFiles(self, pcapFiles, outputDirectory, labelIndex, cutoffNs=None):
+        files = [Path(p).resolve() for p in pcapFiles]
         if not files or len(set(files)) != len(files):
-            raise ValueError('Informe arquivos PCAP distintos e uma lista não vazia.')
-        for path in files:
-            if not path.is_file():
-                raise FileNotFoundError(path)
-        output, report = Path(outputPath).resolve(), Path(featureReportPath).resolve()
-        if output == report or output in files or report in files:
-            raise ValueError('Dataset, relatório e arquivos de entrada devem ter caminhos distintos.')
-        output.parent.mkdir(parents=True, exist_ok=True)
-        report.parent.mkdir(parents=True, exist_ok=True)
-        # Publica somente resultados concluídos; falhas preservam a execução anterior.
-        temporary = output.with_name(output.name + '.partial')
-        temporary_report = report.with_name(report.name + '.partial')
-        if temporary in files or temporary_report in files:
-            raise ValueError('Arquivo temporário coincide com uma entrada.')
+            raise ValueError('Informe PCAPs distintos e uma lista não vazia.')
+        output = Path(outputDirectory).resolve()
+        output.mkdir(parents=True, exist_ok=True)
+        feature_path, count_path = output / 'window_features.csv', output / 'window_label_counts.csv'
+        temp_features = feature_path.with_suffix('.csv.partial')
+        temp_counts = count_path.with_suffix('.csv.partial')
+        if set(files) & {feature_path, count_path, temp_features, temp_counts}:
+            raise ValueError('Saídas não podem coincidir com entradas.')
+        records = iter_merged_packets(files, cutoff_ns=cutoffNs, max_packets=self.maxPackets)
+        matcher = None
+        total = ipv4 = windows = matched = unknown = ambiguous = truncated = fragmented = 0
+        first_ns = last_ns = current_start = None
+        accumulator, labels, reasons = WindowAccumulator(), Counter(), Counter()
         started = time.perf_counter()
-        tracker = FlowTracker(self.idle_ns)
-        accumulator = WindowAccumulator(self.packetLengthMode, self.subflow_ns)
-        current_start = None
-        total = ipv4 = windows = 0
-        limited = False
-        records = iter_merged_packets(files)
         try:
-            with temporary.open('w', newline='', encoding='utf-8') as handle:
-                writer = csv.DictWriter(handle, fieldnames=METADATA_NAMES + FEATURE_NAMES)
-                writer.writeheader()
+            with temp_features.open('w', newline='', encoding='utf-8') as fh, temp_counts.open('w', newline='', encoding='utf-8') as ch:
+                fw = csv.DictWriter(fh, fieldnames=METADATA_NAMES + FEATURE_NAMES)
+                cw = csv.DictWriter(ch, fieldnames=COUNT_COLUMNS)
+                fw.writeheader()
+                cw.writeheader()
 
-                def emit():
+                def emit(complete):
                     nonlocal windows
-                    row = dict(Timestamp=utc_timestamp(current_start + self.duration_ns))
-                    row.update(accumulator.finish(self.duration_ns / 1_000_000_000))
-                    writer.writerow(row)
+                    meta = dict(WindowStart=utc_timestamp(current_start),
+                                Timestamp=utc_timestamp(current_start + self.duration_ns),
+                                WindowComplete=int(complete))
+                    features = accumulator.finish()
+                    fw.writerow({**meta, **features})
+                    benign = labels.get('BENIGN', 0)
+                    attacks = {k: v for k, v in labels.items() if k != 'BENIGN'}
+                    attack = sum(attacks.values())
+                    missing = sum(reasons.values())
+                    n = accumulator.packets
+                    assert benign + attack + missing == n
+                    cw.writerow({**meta, 'Packet_Count': n, 'Benign_Packet_Count': benign,
+                                 'Attack_Packet_Count': attack, 'Unknown_Packet_Count': missing,
+                                 'Ambiguous_Packet_Count': reasons['ambiguous'],
+                                 'Unmatched_Packet_Count': reasons['unmatched'],
+                                 'Unsupported_Packet_Count': reasons['unsupported'],
+                                 'Attack_Packet_Ratio': attack / n if n else 0.0,
+                                 'Label_Coverage': (benign + attack) / n if n else 0.0,
+                                 'Attack_Class_Counts': json.dumps(attacks, sort_keys=True)})
                     windows += 1
 
                 for packet in records:
-                    timestamp = packet['TimestampNs']
-                    window_start = timestamp // self.duration_ns * self.duration_ns
-                    if current_start is None:
-                        current_start = window_start
-                    elif window_start != current_start:
-                        emit()
+                    ns = packet['TimestampNs']
+                    start = ns // self.duration_ns * self.duration_ns
+                    if first_ns is None:
+                        first_ns = ns
+                        current_start = start
+                        matcher = labelIndex.matcher(ns, cutoffNs)
+                    elif start != current_start:
+                        emit(current_start >= first_ns)
                         current_start += self.duration_ns
-                        accumulator = WindowAccumulator(self.packetLengthMode, self.subflow_ns)
+                        accumulator, labels, reasons = WindowAccumulator(), Counter(), Counter()
                         if self.keepEmptyWindows:
-                            while current_start < window_start:
-                                emit()
+                            while current_start < start:
+                                emit(True)
                                 current_start += self.duration_ns
-                        current_start = window_start
-                        accumulator = WindowAccumulator(self.packetLengthMode, self.subflow_ns)
-                    assignment = tracker.observe(packet) if packet['IsIPv4'] and packet['Assignable'] else None
-                    accumulator.update(packet, assignment)
+                        current_start = start
                     total += 1
-                    ipv4 += int(packet['IsIPv4'])
+                    last_ns = ns
+                    accumulator.update(packet)
+                    if packet['IsIPv4']:
+                        ipv4 += 1
+                        truncated += packet['Truncated']
+                        fragmented += packet['Fragmented']
+                        label, status = matcher.match(packet)
+                        if status == 'matched':
+                            labels[label] += 1
+                            matched += 1
+                        else:
+                            reasons[status] += 1
+                            unknown += 1
+                            ambiguous += status == 'ambiguous'
                     if self.progressEvery and total % self.progressEvery == 0:
-                        print(f'{total:,} pacotes processados; {windows:,} janelas gravadas.')
-                    if self.maxPackets is not None and total >= self.maxPackets:
-                        limited = True
-                        break
-                if current_start is None:
-                    raise ValueError('Os arquivos não contêm pacotes.')
-                emit()
-            with temporary_report.open('w', newline='', encoding='utf-8') as handle:
-                rows = feature_dictionary(self.packetLengthMode, self.idle_ns / 1e9, self.subflow_ns / 1e9,
-                                          window_seconds=self.duration_ns / 1e9)
-                writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
-                writer.writeheader()
-                writer.writerows(rows)
-            temporary.replace(output)
-            temporary_report.replace(report)
+                        elapsed = time.perf_counter() - started
+                        print(f'{total:,} pacotes | {windows:,} janelas | {total / elapsed:,.0f} pacotes/s | '
+                              f'cobertura IPv4: {matched / ipv4:.2%}' if ipv4 else f'{total:,} pacotes | sem IPv4', flush=True)
+                if first_ns is None:
+                    raise ValueError('Nenhum pacote antes do corte; confira data/fuso e entradas.')
+                # Conservador: última janela é parcial, pois limite/EOF pode cortá-la.
+                emit(False)
+            temp_features.replace(feature_path)
+            temp_counts.replace(count_path)
         finally:
             records.close()
-            temporary.unlink(missing_ok=True)
-            temporary_report.unlink(missing_ok=True)
-        return DatasetResult(str(output), str(report), total, ipv4, windows, limited,
-                             time.perf_counter() - started)
+            if matcher is not None:
+                matcher.close()
+            temp_features.unlink(missing_ok=True)
+            temp_counts.unlink(missing_ok=True)
+        elapsed = time.perf_counter() - started
+        return DatasetResult(str(feature_path), str(count_path), total, ipv4, windows,
+                             self.maxPackets is not None and total >= self.maxPackets,
+                             elapsed, total / elapsed, matched / ipv4 if ipv4 else 0.0,
+                             matched, unknown, ambiguous, truncated, fragmented,
+                             utc_timestamp(first_ns), utc_timestamp(last_ns))
